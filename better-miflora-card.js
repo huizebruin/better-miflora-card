@@ -1,4 +1,3 @@
-/* Enhanced better-miflora-card with threshold alerts and battery icons (no-crop image) */
 class BetterMifloraCard extends HTMLElement {
   constructor() {
     super();
@@ -168,21 +167,15 @@ class BetterMifloraCard extends HTMLElement {
 
     style.textContent = `
       ha-card { position: relative; padding: 16px; background-size: cover; background-position: center; }
-
-      /* Layout: sensors on the left, image on the right (no-crop) */
       .content { display: flex; flex-direction: row; gap: 16px; align-items: flex-start; }
-
-      /* sensors column - takes remaining space */
       #sensors { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; }
-
-      /* Image box - fixed 125x125, image contained (no cropping) */
       .image {
-        width: 125px;
-        height: 125px;
-        flex: 0 0 125px;
+        width: 150px;
+        height: 150px;
+        flex: 0 0 150px;
         border-radius: 8px;
         display: block;
-        object-fit: contain;        /* <-- contain ensures no cropping */
+        object-fit: contain;
         object-position: center;
         background-color: var(--card-background-color, transparent); /* shows letterbox if needed */
         box-shadow: 0 2px 8px rgba(0,0,0,0.15);
@@ -207,12 +200,10 @@ class BetterMifloraCard extends HTMLElement {
     content.id = 'container';
     content.className = 'content clearfix';
 
-    // sensors column first (left)
     const sensorsDiv = document.createElement('div');
     sensorsDiv.id = 'sensors';
     content.appendChild(sensorsDiv);
 
-    // Add image if configured - appended after sensors so it appears on the right
     if (this.config.image) {
       const plantimage = document.createElement('img');
       plantimage.className = 'image';
