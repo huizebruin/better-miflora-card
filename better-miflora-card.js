@@ -170,9 +170,9 @@ class BetterMifloraCard extends HTMLElement {
       .content { display: flex; flex-direction: row; gap: 16px; align-items: flex-start; }
       #sensors { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; }
       .image {
-        width: 150px;
-        height: 150px;
-        flex: 0 0 150px;
+        width: 130px;
+        height: 130px;
+        flex: 0 0 130px;
         border-radius: 8px;
         display: block;
         object-fit: contain;
