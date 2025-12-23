@@ -379,7 +379,7 @@ class BetterMifloraCard extends HTMLElement {
             .progress-wrap {
                 display: flex;
                 align-items: center;
-                gap: 8px;
+                gap: 6px;               /* reduced gap to make it more compact */
                 margin-left: 10px;
                 margin-top: 6px;
             }
@@ -390,21 +390,21 @@ class BetterMifloraCard extends HTMLElement {
             .progress {
                 background: rgba(0,0,0,0.06);
                 border-radius: 6px;
-                height: 10px;
-                width: calc(100% - 70px);
+                height: 6px;            /* made the bar thinner */
+                width: calc(100% - 90px); /* slightly narrower to fit labels better */
                 overflow: hidden;
                 flex: 1 1 auto;
             }
             .progress-fill {
                 height: 100%;
                 width: 0%;
-                border-radius: 6px;
+                border-radius: 4px;     /* slightly smaller radius to match thinner bar */
                 transition: width 300ms ease, background 300ms ease;
             }
             .progress-label {
-                min-width: 60px;
+                min-width: 48px;        /* smaller label width to reduce overall size */
                 text-align: right;
-                font-size: 0.85rem;
+                font-size: 0.8rem;      /* slightly smaller text */
                 color: var(--secondary-text-color);
             }
             .clearfix::after {
