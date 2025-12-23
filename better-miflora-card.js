@@ -1,4 +1,4 @@
-/* Enhanced better-miflora-card with threshold alerts and battery icons */
+/* Enhanced better-miflora-card with threshold alerts and battery icons (no-crop image) */
 class BetterMifloraCard extends HTMLElement {
   constructor() {
     super();
@@ -15,15 +15,12 @@ class BetterMifloraCard extends HTMLElement {
       humidity: 'mdi:water-percent'
     };
 
-    // Wait for ha-icon to be available
     if (customElements.get('ha-icon')) {
       this._initialized = true;
     } else {
       customElements.whenDefined('ha-icon').then(() => {
         this._initialized = true;
-        if (this._hass && this.config) {
-          this._render();
-        }
+        if (this._hass && this.config) this._render();
       });
     }
   }
@@ -31,13 +28,9 @@ class BetterMifloraCard extends HTMLElement {
   _computeIcon(sensor, state) {
     const configured = this.config?.custom_icons?.[sensor];
     const base = configured || this.sensors[sensor] || 'mdi:circle';
-
     if (sensor === 'battery' && typeof state === 'number' && !isNaN(state)) {
-      if (state <= 5) {
-        return `${base}-alert`;
-      } else if (state < 95) {
-        return `${base}-${Math.round((state / 10) - 0.01) * 10}`;
-      }
+      if (state <= 5) return `${base}-alert`;
+      if (state < 95) return `${base}-${Math.round((state / 10) - 0.01) * 10}`;
     }
     return base;
   }
@@ -68,39 +61,29 @@ class BetterMifloraCard extends HTMLElement {
       const minutes = Math.floor(diff / 60000);
       const hours = Math.floor(minutes / 60);
       const days = Math.floor(hours / 24);
-
       if (minutes < 1) return 'Just now';
       if (minutes < 60) return `${minutes}m ago`;
       if (hours < 24) return `${hours}h ago`;
       if (days < 7) return `${days}d ago`;
       return d.toLocaleDateString();
-    } catch (e) { 
-      return iso; 
+    } catch (e) {
+      return iso;
     }
   }
 
   _createIcon(iconName, color = null) {
     const haIcon = document.createElement('ha-icon');
     haIcon.setAttribute('icon', iconName);
-
-    // Apply inline styles for maximum compatibility
-    const styles = {
+    Object.assign(haIcon.style, {
       '--mdc-icon-size': '24px',
-      'width': '24px',
-      'height': '24px',
-      'display': 'inline-flex',
-      'align-items': 'center',
-      'justify-content': 'center',
-      'color': color || 'var(--paper-item-icon-color, currentColor)'
-    };
-
-    Object.assign(haIcon.style, styles);
-
-    // Ensure icon property is set (some HA versions need this)
-    requestAnimationFrame(() => {
-      if (!haIcon.icon) haIcon.icon = iconName;
+      width: '24px',
+      height: '24px',
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      color: color || 'var(--paper-item-icon-color, currentColor)'
     });
-
+    requestAnimationFrame(() => { if (!haIcon.icon) haIcon.icon = iconName; });
     return haIcon;
   }
 
@@ -110,114 +93,52 @@ class BetterMifloraCard extends HTMLElement {
     const minConductivity = this._safeNumber(config.min_conductivity);
     const minTemperature = this._safeNumber(config.min_termperature);
 
-    let alertStyle = '';
-    let alertIcon = '';
-    let rangeInfo = '';
+    let alertStyle = '', alertIcon = '', rangeInfo = '';
 
     if (type === 'moisture') {
-      if (maxMoisture !== null && stateNum > maxMoisture) {
-        alertStyle = 'color: var(--error-color, red); font-weight: 600;';
-        alertIcon = '▲ ';
-      } else if (minMoisture !== null && stateNum < minMoisture) {
-        alertStyle = 'color: var(--error-color, red); font-weight: 600;';
-        alertIcon = '▼ ';
-      }
-
-      if (minMoisture !== null && maxMoisture !== null) {
-        rangeInfo = ` (${minMoisture}% - ${maxMoisture}%)`;
-      }
+      if (maxMoisture !== null && stateNum > maxMoisture) { alertStyle = 'color: var(--error-color, red); font-weight: 600;'; alertIcon = '▲ '; }
+      else if (minMoisture !== null && stateNum < minMoisture) { alertStyle = 'color: var(--error-color, red); font-weight: 600;'; alertIcon = '▼ '; }
+      if (minMoisture !== null && maxMoisture !== null) rangeInfo = ` (${minMoisture}% - ${maxMoisture}%)`;
     }
-
-    if (type === 'conductivity' && minConductivity !== null && stateNum < minConductivity) {
-      alertStyle = 'color: var(--error-color, red); font-weight: 600;';
-      alertIcon = '▼ ';
-    }
-
-    if (type === 'temperature' && minTemperature !== null && stateNum < minTemperature) {
-      alertStyle = 'color: var(--error-color, red); font-weight: 600;';
-      alertIcon = '▼ ';
-    }
+    if (type === 'conductivity' && minConductivity !== null && stateNum < minConductivity) { alertStyle = 'color: var(--error-color, red); font-weight: 600;'; alertIcon = '▼ '; }
+    if (type === 'temperature' && minTemperature !== null && stateNum < minTemperature) { alertStyle = 'color: var(--error-color, red); font-weight: 600;'; alertIcon = '▼ '; }
 
     return { alertStyle, alertIcon, rangeInfo };
   }
 
   _render() {
     if (!this._initialized || !this.config || !this._hass) return;
-
-    const config = this.config;
-    const hass = this._hass;
-
+    const config = this.config, hass = this._hass;
     const sensorsDiv = this.shadowRoot.getElementById('sensors');
     if (!sensorsDiv) return;
-
     sensorsDiv.innerHTML = '';
 
     for (let i = 0; i < config.entities.length; i++) {
-      const entry = config.entities[i];
-      const type = entry.type;
-      const entity = entry.entity;
+      const entry = config.entities[i], type = entry.type, entity = entry.entity;
       const entityState = hass.states[entity];
-
-      // Display name
       const displayName = entry.name || (type ? (type[0].toUpperCase() + type.slice(1)) : 'Unknown');
-
-      // Get state
-      let rawState = entityState?.state || null;
+      const rawState = entityState?.state || null;
       const stateNum = this._safeNumber(rawState);
       const uom = entityState?.attributes?.unit_of_measurement || '';
-
-      let displayState;
-      if (stateNum === null) {
-        displayState = rawState || 'unavailable';
-      } else {
-        displayState = `${stateNum}${uom}`;
-      }
-
-      // Get icon
+      const displayState = stateNum === null ? (rawState || 'unavailable') : `${stateNum}${uom}`;
       const icon = this._computeIcon(type, stateNum);
-
-      // Get alert info based on thresholds
       const { alertStyle, alertIcon, rangeInfo } = this._getAlertInfo(type, stateNum, config);
 
-      // Build sensor element
       const sensorEl = document.createElement('div');
       sensorEl.className = 'sensor';
       sensorEl.id = `sensor${i}`;
       sensorEl.setAttribute('role', 'button');
       sensorEl.setAttribute('tabindex', '0');
       sensorEl.addEventListener('click', () => this._click(entity));
-      sensorEl.addEventListener('keypress', (e) => { 
-        if (e.key === 'Enter' || e.key === ' ') { 
-          e.preventDefault(); 
-          this._click(entity); 
-        }
-      });
+      sensorEl.addEventListener('keypress', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this._click(entity); } });
       sensorEl.title = `${displayName}: ${displayState}`;
 
-      // Icon
-      const iconWrap = document.createElement('div');
-      iconWrap.className = 'icon';
-      const haIcon = this._createIcon(icon);
-      iconWrap.appendChild(haIcon);
+      const iconWrap = document.createElement('div'); iconWrap.className = 'icon'; iconWrap.appendChild(this._createIcon(icon));
+      const nameWrap = document.createElement('div'); nameWrap.className = 'name'; nameWrap.textContent = `${displayName}${rangeInfo}`;
+      const stateWrap = document.createElement('div'); stateWrap.className = 'state'; if (alertStyle) stateWrap.style.cssText = alertStyle; stateWrap.innerHTML = `${alertIcon}${displayState}`;
 
-      // Name with range info
-      const nameWrap = document.createElement('div');
-      nameWrap.className = 'name';
-      nameWrap.textContent = `${displayName}${rangeInfo}`;
+      sensorEl.appendChild(iconWrap); sensorEl.appendChild(nameWrap); sensorEl.appendChild(stateWrap);
 
-      // State with alert styling
-      const stateWrap = document.createElement('div');
-      stateWrap.className = 'state';
-      if (alertStyle) {
-        stateWrap.style.cssText = alertStyle;
-      }
-      stateWrap.innerHTML = `${alertIcon}${displayState}`;
-
-      sensorEl.appendChild(iconWrap);
-      sensorEl.appendChild(nameWrap);
-      sensorEl.appendChild(stateWrap);
-
-      // Last changed (if enabled)
       const compact = Boolean(config.compact);
       if (!compact && config.show_last_changed) {
         const lastChangedRaw = entityState?.last_changed;
@@ -233,18 +154,11 @@ class BetterMifloraCard extends HTMLElement {
     }
   }
 
-  set hass(hass) {
-    this._hass = hass;
-    this._render();
-  }
+  set hass(hass) { this._hass = hass; this._render(); }
 
   setConfig(config) {
-    if (!config.entities) {
-      throw new Error('Please define an entity');
-    }
-
+    if (!config.entities) throw new Error('Please define an entity');
     this.config = config;
-
     const root = this.shadowRoot;
     root.innerHTML = '';
 
@@ -253,119 +167,41 @@ class BetterMifloraCard extends HTMLElement {
     const style = document.createElement('style');
 
     style.textContent = `
-      ha-card { 
-        position: relative; 
-        padding: 16px; 
-        background-size: cover;
-        background-position: center;
-      }
-      
-      /* Layout: sensors on the left, image on the right */
-      .content {
-        display: flex;
-        flex-direction: row;
-        gap: 16px;
-        align-items: flex-start;
-      }
+      ha-card { position: relative; padding: 16px; background-size: cover; background-position: center; }
+
+      /* Layout: sensors on the left, image on the right (no-crop) */
+      .content { display: flex; flex-direction: row; gap: 16px; align-items: flex-start; }
 
       /* sensors column - takes remaining space */
-      #sensors {
-        display: flex;
-        flex-direction: column;
-        flex: 1 1 auto;
-        min-width: 0; /* allow truncation */
-      }
+      #sensors { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; }
 
-      .image { 
+      /* Image box - fixed 125x125, image contained (no cropping) */
+      .image {
         width: 125px;
         height: 125px;
-        border-radius: 8px; 
-        object-fit: cover;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
         flex: 0 0 125px;
-      }
-      
-      .sensor { 
-        display: flex; 
-        align-items: center;
-        cursor: pointer; 
-        padding: 12px 8px; 
-        border-bottom: 1px solid var(--divider-color, rgba(0,0,0,0.06));
-        transition: background-color 0.2s ease;
-        flex-wrap: nowrap;
-      }
-      
-      .sensor:hover {
-        background-color: var(--secondary-background-color, rgba(0,0,0,0.02));
         border-radius: 8px;
-      }
-      
-      .sensor:last-child {
-        border-bottom: none;
-      }
-      
-      .icon { 
-        margin-right: 12px;
-        color: var(--paper-item-icon-color, #44739e);
-        width: 24px;
-        height: 24px;
-        flex: 0 0 24px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-      }
-      
-      /* Critical: Force ha-icon visibility */
-      ha-icon {
-        display: inline-flex !important;
-        width: 24px !important;
-        height: 24px !important;
-        min-width: 24px !important;
-        min-height: 24px !important;
-        --mdc-icon-size: 24px !important;
-      }
-      
-      .icon ha-icon {
-        color: inherit;
-      }
-      
-      .name { 
-        flex: 1 1 auto;
-        font-weight: 500;
-        color: var(--primary-text-color);
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        margin-top: 3px;
-      }
-      
-      .state { 
-        margin-left: 12px;
-        font-weight: 500;
-        color: var(--secondary-text-color);
-        white-space: nowrap;
-        margin-top: 3px;
-        flex: 0 0 auto;
-      }
-      
-      .secondary { 
-        width: 100%;
-        margin-top: 6px;
-        margin-left: 36px;
-        font-size: 0.75rem;
-        color: var(--secondary-text-color, #888);
-        opacity: 0.8;
-      }
-      
-      .clearfix::after { 
-        content: "";
-        clear: both;
-        display: table;
+        display: block;
+        object-fit: contain;        /* <-- contain ensures no cropping */
+        object-position: center;
+        background-color: var(--card-background-color, transparent); /* shows letterbox if needed */
+        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
       }
 
-      #container {
-        position: relative;
-      }
+      .sensor { display: flex; align-items: center; cursor: pointer; padding: 12px 8px; border-bottom: 1px solid var(--divider-color, rgba(0,0,0,0.06)); transition: background-color 0.2s ease; flex-wrap: nowrap; }
+      .sensor:hover { background-color: var(--secondary-background-color, rgba(0,0,0,0.02)); border-radius: 8px; }
+      .sensor:last-child { border-bottom: none; }
+
+      .icon { margin-right: 12px; color: var(--paper-item-icon-color, #44739e); width: 24px; height: 24px; flex: 0 0 24px; display: flex; align-items: center; justify-content: center; }
+      ha-icon { display: inline-flex !important; width: 24px !important; height: 24px !important; min-width: 24px !important; min-height: 24px !important; --mdc-icon-size: 24px !important; }
+      .icon ha-icon { color: inherit; }
+
+      .name { flex: 1 1 auto; font-weight: 500; color: var(--primary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 3px; }
+      .state { margin-left: 12px; font-weight: 500; color: var(--secondary-text-color); white-space: nowrap; margin-top: 3px; flex: 0 0 auto; }
+      .secondary { width: 100%; margin-top: 6px; margin-left: 36px; font-size: 0.75rem; color: var(--secondary-text-color, #888); opacity: 0.8; }
+
+      .clearfix::after { content: ""; clear: both; display: table; }
+      #container { position: relative; }
     `;
 
     content.id = 'container';
@@ -386,20 +222,15 @@ class BetterMifloraCard extends HTMLElement {
       content.appendChild(plantimage);
     }
 
-    card.header = config.title || '';
+    card.header = this.config.title || '';
     card.appendChild(content);
     card.appendChild(style);
     root.appendChild(card);
 
-    // Trigger initial render if hass is available
-    if (this._hass) {
-      this._render();
-    }
+    if (this._hass) this._render();
   }
 
-  getCardSize() { 
-    return 2;
-  }
+  getCardSize() { return 2; }
 }
 
 customElements.define('better-miflora-card', BetterMifloraCard);
