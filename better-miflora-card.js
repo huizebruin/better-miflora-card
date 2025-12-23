@@ -1,202 +1,405 @@
+/* Enhanced better-miflora-card with threshold alerts and battery icons */
 class BetterMifloraCard extends HTMLElement {
-    constructor() {
-        super();
-        this.attachShadow({
-            mode: 'open'
-        });
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._hass = null;
+    this._initialized = false;
 
-        this.sensors = {
-            moisture: 'hass:water',
-            temperature: 'hass:thermometer',
-            illuminance: 'hass:white-balance-sunny',
-            conductivity: 'hass:emoticon-poop',
-            battery: 'hass:battery'
-        };
-    }
+    this.sensors = {
+      moisture: 'mdi:water',
+      temperature: 'mdi:thermometer',
+      illuminance: 'mdi:white-balance-sunny',
+      conductivity: 'mdi:emoticon-poop',
+      battery: 'mdi:battery',
+      humidity: 'mdi:water-percent'
+    };
 
-    _computeIcon(sensor, state) {
-        const icon = this.sensors[sensor];
-        if (sensor === 'battery') {
-            if (state <= 5) {
-                return `${icon}-alert`;
-            } else if (state < 95) {
-                return `${icon}-${Math.round((state / 10) - 0.01) * 10}`;
-            }
+    // Wait for ha-icon to be available
+    if (customElements.get('ha-icon')) {
+      this._initialized = true;
+    } else {
+      customElements.whenDefined('ha-icon').then(() => {
+        this._initialized = true;
+        if (this._hass && this.config) {
+          this._render();
         }
-        return icon;
+      });
+    }
+  }
+
+  _computeIcon(sensor, state) {
+    const configured = this.config?.custom_icons?.[sensor];
+    const base = configured || this.sensors[sensor] || 'mdi:circle';
+
+    if (sensor === 'battery' && typeof state === 'number' && !isNaN(state)) {
+      if (state <= 5) {
+        return `${base}-alert`;
+      } else if (state < 95) {
+        return `${base}-${Math.round((state / 10) - 0.01) * 10}`;
+      }
+    }
+    return base;
+  }
+
+  _click(entity) {
+    this._fire('hass-more-info', { entityId: entity });
+  }
+
+  _fire(type, detail) {
+    const event = new Event(type, { bubbles: true, cancelable: false, composed: true });
+    event.detail = detail || {};
+    this.dispatchEvent(event);
+    return event;
+  }
+
+  _safeNumber(v) {
+    if (v === undefined || v === null) return null;
+    const n = parseFloat(v);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  _formatDate(iso) {
+    try {
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return iso;
+      const now = new Date();
+      const diff = now - d;
+      const minutes = Math.floor(diff / 60000);
+      const hours = Math.floor(minutes / 60);
+      const days = Math.floor(hours / 24);
+
+      if (minutes < 1) return 'Just now';
+      if (minutes < 60) return `${minutes}m ago`;
+      if (hours < 24) return `${hours}h ago`;
+      if (days < 7) return `${days}d ago`;
+      return d.toLocaleDateString();
+    } catch (e) { 
+      return iso; 
+    }
+  }
+
+  _createIcon(iconName, color = null) {
+    const haIcon = document.createElement('ha-icon');
+    haIcon.setAttribute('icon', iconName);
+
+    // Apply inline styles for maximum compatibility
+    const styles = {
+      '--mdc-icon-size': '24px',
+      'width': '24px',
+      'height': '24px',
+      'display': 'inline-flex',
+      'align-items': 'center',
+      'justify-content': 'center',
+      'color': color || 'var(--paper-item-icon-color, currentColor)'
+    };
+
+    Object.assign(haIcon.style, styles);
+
+    // Ensure icon property is set (some HA versions need this)
+    requestAnimationFrame(() => {
+      if (!haIcon.icon) haIcon.icon = iconName;
+    });
+
+    return haIcon;
+  }
+
+  _getAlertInfo(type, stateNum, config) {
+    const maxMoisture = this._safeNumber(config.max_moisture);
+    const minMoisture = this._safeNumber(config.min_moisture);
+    const minConductivity = this._safeNumber(config.min_conductivity);
+    const minTemperature = this._safeNumber(config.min_termperature);
+
+    let alertStyle = '';
+    let alertIcon = '';
+    let rangeInfo = '';
+
+    if (type === 'moisture') {
+      if (maxMoisture !== null && stateNum > maxMoisture) {
+        alertStyle = 'color: var(--error-color, red); font-weight: 600;';
+        alertIcon = '▲ ';
+      } else if (minMoisture !== null && stateNum < minMoisture) {
+        alertStyle = 'color: var(--error-color, red); font-weight: 600;';
+        alertIcon = '▼ ';
+      }
+
+      if (minMoisture !== null && maxMoisture !== null) {
+        rangeInfo = ` (${minMoisture}% - ${maxMoisture}%)`;
+      }
     }
 
-    _click(entity) {
-        this._fire('hass-more-info', {
-            entityId: entity
-        });
+    if (type === 'conductivity' && minConductivity !== null && stateNum < minConductivity) {
+      alertStyle = 'color: var(--error-color, red); font-weight: 600;';
+      alertIcon = '▼ ';
     }
 
-    _fire(type, detail) {
-        const event = new Event(type, {
-            bubbles: true,
-            cancelable: false,
-            composed: true
-        });
-        event.detail = detail || {};
-        this.shadowRoot.dispatchEvent(event);
-        return event;
+    if (type === 'temperature' && minTemperature !== null && stateNum < minTemperature) {
+      alertStyle = 'color: var(--error-color, red); font-weight: 600;';
+      alertIcon = '▼ ';
     }
 
-    //Home Assistant will set the hass property when the state of Home Assistant changes (frequent).
-    set hass(hass) {
-        const config = this.config;
+    return { alertStyle, alertIcon, rangeInfo };
+  }
 
-        var _maxMoisture = parseFloat(config.max_moisture);
-        var _minMoisture = parseFloat(config.min_moisture);
-        var _minConductivity = parseFloat(config.min_conductivity);
-        var _minTemperature = parseFloat(config.min_termperature);
+  _render() {
+    if (!this._initialized || !this.config || !this._hass) return;
 
-        this.shadowRoot.getElementById('container').innerHTML = `
-            <div class="content clearfix">
-                <div id="sensors"></div>
-            </div>
-            `;
+    const config = this.config;
+    const hass = this._hass;
 
-        for (var i = 0; i < config.entities.length; i++) {
-            var _name = config.entities[i]['type'];
-            var _sensor = config.entities[i]['entity'];
-            if (config.entities[i]['name']) {
-                var _display_name = config.entities[i]['name'];
-            } else {
-                var _display_name = _name[0].toUpperCase() + _name.slice(1);
-            }
-            var _state = '';
-            var _uom = '';
-            if (hass.states[_sensor]) {
-                _state = parseFloat(hass.states[_sensor].state);
-                _uom = hass.states[_sensor].attributes.unit_of_measurement || "";
-            } else {
-                _state = 'Invalid Sensor';
-            }
+    const sensorsDiv = this.shadowRoot.getElementById('sensors');
+    if (!sensorsDiv) return;
 
-            var _icon = this._computeIcon(_name, _state);
-            var _alertStyle = '';
-            var _alertIcon = '';
-            let moistureInfo = '';
-            if (_name == 'moisture') {
-                if (_state > _maxMoisture) {
-                    _alertStyle = ';color:red';
-                    _alertIcon = '&#9650; ';
-                } else if (_state < _minMoisture) {
-                    _alertStyle = ';color:red';
-                    _alertIcon = '&#9660; '
-                }
+    sensorsDiv.innerHTML = '';
 
-                if (_minMoisture && _maxMoisture) {
-                    moistureInfo = ` (${_minMoisture}% - ${_maxMoisture}%)`
-                }
-            }
-            if (_name == 'conductivity') {
-                if (_state < _minConductivity) {
-                    _alertStyle = ';color:red';
-                    _alertIcon = '&#9660; ';
-                }
-            }
-            if (_name == 'temperature') {
-                if (_state < _minTemperature) {
-                    _alertStyle = ';color:red';
-                    _alertIcon = '&#9660; ';
-                }
-            }
-            this.shadowRoot.getElementById('sensors').innerHTML += `
-                <div id="sensor${i}" class="sensor">
-                    <div class="icon"><ha-icon icon="${_icon}"></ha-icon></div>
-                    <div class="name">${_display_name[0].toUpperCase()}${_display_name.slice(1)}${moistureInfo}</div>
-                    <div class="state" style="${_alertStyle}">${_alertIcon}${_state}${_uom}</div>
-                </div>
-                `
+    for (let i = 0; i < config.entities.length; i++) {
+      const entry = config.entities[i];
+      const type = entry.type;
+      const entity = entry.entity;
+      const entityState = hass.states[entity];
+
+      // Display name
+      const displayName = entry.name || (type ? (type[0].toUpperCase() + type.slice(1)) : 'Unknown');
+
+      // Get state
+      let rawState = entityState?.state || null;
+      const stateNum = this._safeNumber(rawState);
+      const uom = entityState?.attributes?.unit_of_measurement || '';
+
+      let displayState;
+      if (stateNum === null) {
+        displayState = rawState || 'unavailable';
+      } else {
+        displayState = `${stateNum}${uom}`;
+      }
+
+      // Get icon
+      const icon = this._computeIcon(type, stateNum);
+
+      // Get alert info based on thresholds
+      const { alertStyle, alertIcon, rangeInfo } = this._getAlertInfo(type, stateNum, config);
+
+      // Build sensor element
+      const sensorEl = document.createElement('div');
+      sensorEl.className = 'sensor';
+      sensorEl.id = `sensor${i}`;
+      sensorEl.setAttribute('role', 'button');
+      sensorEl.setAttribute('tabindex', '0');
+      sensorEl.addEventListener('click', () => this._click(entity));
+      sensorEl.addEventListener('keypress', (e) => { 
+        if (e.key === 'Enter' || e.key === ' ') { 
+          e.preventDefault(); 
+          this._click(entity); 
         }
+      });
+      sensorEl.title = `${displayName}: ${displayState}`;
 
-        for (var i = 0; i < config.entities.length; i++) {
-            this.shadowRoot.getElementById('sensor' + [i]).onclick = this._click.bind(this, config.entities[i]['entity']);
+      // Icon
+      const iconWrap = document.createElement('div');
+      iconWrap.className = 'icon';
+      const haIcon = this._createIcon(icon);
+      iconWrap.appendChild(haIcon);
+
+      // Name with range info
+      const nameWrap = document.createElement('div');
+      nameWrap.className = 'name';
+      nameWrap.textContent = `${displayName}${rangeInfo}`;
+
+      // State with alert styling
+      const stateWrap = document.createElement('div');
+      stateWrap.className = 'state';
+      if (alertStyle) {
+        stateWrap.style.cssText = alertStyle;
+      }
+      stateWrap.innerHTML = `${alertIcon}${displayState}`;
+
+      sensorEl.appendChild(iconWrap);
+      sensorEl.appendChild(nameWrap);
+      sensorEl.appendChild(stateWrap);
+
+      // Last changed (if enabled)
+      const compact = Boolean(config.compact);
+      if (!compact && config.show_last_changed) {
+        const lastChangedRaw = entityState?.last_changed;
+        if (lastChangedRaw) {
+          const secondary = document.createElement('div');
+          secondary.className = 'secondary';
+          secondary.textContent = `Updated ${this._formatDate(lastChangedRaw)}`;
+          sensorEl.appendChild(secondary);
         }
+      }
+
+      sensorsDiv.appendChild(sensorEl);
+    }
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    this._render();
+  }
+
+  setConfig(config) {
+    if (!config.entities) {
+      throw new Error('Please define an entity');
     }
 
-    //  Home Assistant will call setConfig(config) when the configuration changes (rare).
-    setConfig(config) {
-        if (!config.entities) {
-            throw new Error('Please define an entity');
-        }
+    this.config = config;
 
-        const root = this.shadowRoot;
-        if (root.lastChild) root.removeChild(root.lastChild);
+    const root = this.shadowRoot;
+    root.innerHTML = '';
 
-        this.config = config;
+    const card = document.createElement('ha-card');
+    const content = document.createElement('div');
+    const style = document.createElement('style');
 
-        const card = document.createElement('ha-card');
-        const content = document.createElement('div');
-        const plantimage = document.createElement('div');
-        const style = document.createElement('style');
+    style.textContent = `
+      ha-card { 
+        position: relative; 
+        padding: 16px; 
+        background-size: cover;
+        background-position: center;
+      }
+      
+      /* Layout: sensors on the left, image on the right */
+      .content {
+        display: flex;
+        flex-direction: row;
+        gap: 16px;
+        align-items: flex-start;
+      }
 
-        style.textContent = `
-            ha-card {
-                position: relative;
-                padding: 0;
-                background-size: 100%;
-            }
-            ha-card .header {
-                width: 100%;
-            }
-            /* Make the plant image sit on top of the sensors (full width) */
-            .image {
-                display: block;
-                margin: 0 auto 15px;
-                width: 100%;
-                height: auto;
-                border-radius: 6px;
-            }
-            .sensor {
-                display: flex;
-                cursor: pointer;
-                padding-bottom: 10px;
-            }
-            .icon {
-                margin-left: 10px;
-                color: var(--paper-item-icon-color);
-            }
-            .name {
-                margin-top: 3px;
-                margin-left: 10px;
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
-            }
-            .state {
-                white-space: nowrap;
-                overflow: hidden;
-                margin-top: 3px;
-                margin-left: auto
-            }
-            .uom {
-                color: var(--secondary-text-color);
-            }
-            .clearfix::after {
-                content: "";
-                clear: both;
-                display: table;
-            }
-            `;
-        plantimage.innerHTML = `
-            <img class="image" src="/local/${config.image}">
-            `;
+      /* sensors column - takes remaining space */
+      #sensors {
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 auto;
+        min-width: 0; /* allow truncation */
+      }
 
-        content.id = "container";
-        card.header = config.title;
-        card.appendChild(plantimage);
-        card.appendChild(content);
-        card.appendChild(style);
-        root.appendChild(card);
+      .image { 
+        width: 125px;
+        height: 125px;
+        border-radius: 8px; 
+        object-fit: cover;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        flex: 0 0 125px;
+      }
+      
+      .sensor { 
+        display: flex; 
+        align-items: center;
+        cursor: pointer; 
+        padding: 12px 8px; 
+        border-bottom: 1px solid var(--divider-color, rgba(0,0,0,0.06));
+        transition: background-color 0.2s ease;
+        flex-wrap: nowrap;
+      }
+      
+      .sensor:hover {
+        background-color: var(--secondary-background-color, rgba(0,0,0,0.02));
+        border-radius: 8px;
+      }
+      
+      .sensor:last-child {
+        border-bottom: none;
+      }
+      
+      .icon { 
+        margin-right: 12px;
+        color: var(--paper-item-icon-color, #44739e);
+        width: 24px;
+        height: 24px;
+        flex: 0 0 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      
+      /* Critical: Force ha-icon visibility */
+      ha-icon {
+        display: inline-flex !important;
+        width: 24px !important;
+        height: 24px !important;
+        min-width: 24px !important;
+        min-height: 24px !important;
+        --mdc-icon-size: 24px !important;
+      }
+      
+      .icon ha-icon {
+        color: inherit;
+      }
+      
+      .name { 
+        flex: 1 1 auto;
+        font-weight: 500;
+        color: var(--primary-text-color);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        margin-top: 3px;
+      }
+      
+      .state { 
+        margin-left: 12px;
+        font-weight: 500;
+        color: var(--secondary-text-color);
+        white-space: nowrap;
+        margin-top: 3px;
+        flex: 0 0 auto;
+      }
+      
+      .secondary { 
+        width: 100%;
+        margin-top: 6px;
+        margin-left: 36px;
+        font-size: 0.75rem;
+        color: var(--secondary-text-color, #888);
+        opacity: 0.8;
+      }
+      
+      .clearfix::after { 
+        content: "";
+        clear: both;
+        display: table;
+      }
+
+      #container {
+        position: relative;
+      }
+    `;
+
+    content.id = 'container';
+    content.className = 'content clearfix';
+
+    // sensors column first (left)
+    const sensorsDiv = document.createElement('div');
+    sensorsDiv.id = 'sensors';
+    content.appendChild(sensorsDiv);
+
+    // Add image if configured - appended after sensors so it appears on the right
+    if (this.config.image) {
+      const plantimage = document.createElement('img');
+      plantimage.className = 'image';
+      plantimage.src = `/local/${this.config.image}`;
+      plantimage.alt = this.config.title || 'Plant image';
+      plantimage.loading = 'lazy';
+      content.appendChild(plantimage);
     }
 
-    getCardSize() {
-        return 2;
+    card.header = config.title || '';
+    card.appendChild(content);
+    card.appendChild(style);
+    root.appendChild(card);
+
+    // Trigger initial render if hass is available
+    if (this._hass) {
+      this._render();
     }
+  }
+
+  getCardSize() { 
+    return 2;
+  }
 }
 
 customElements.define('better-miflora-card', BetterMifloraCard);
