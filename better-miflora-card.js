@@ -15,15 +15,19 @@ class BetterMifloraCard extends HTMLElement {
 
     _computeIcon(sensor, state) {
         const icon = this.sensors[sensor];
+
+        // Battery: choose alert or tiered icons
         if (sensor === 'battery' && typeof state === 'number' && !isNaN(state)) {
             if (state <= 5) {
                 return `${icon}-alert`;
             } else {
                 // Round to nearest 10 and clamp between 0 and 100
                 const tier = Math.min(100, Math.max(0, Math.round(state / 10) * 10));
+                // Ensure we always return a valid mdi-style name; use explicit -100 for 100
                 return `${icon}-${tier}`;
             }
         }
+
         return icon;
     }
 
@@ -48,6 +52,14 @@ class BetterMifloraCard extends HTMLElement {
         if (v === undefined || v === null) return null;
         const n = parseFloat(v);
         return (Number.isFinite(n) ? n : null);
+    }
+
+    _formatDate(iso) {
+        try {
+            return new Date(iso).toLocaleString();
+        } catch (e) {
+            return iso;
+        }
     }
 
     // Home Assistant will set the hass property when the state of Home Assistant changes.
@@ -79,6 +91,7 @@ class BetterMifloraCard extends HTMLElement {
 
             let rawState = hass.states[_sensor] ? hass.states[_sensor].state : null;
             let _stateNum = this._safeNumber(rawState);
+
             let _uom = (hass.states[_sensor] && hass.states[_sensor].attributes) ?
                 (hass.states[_sensor].attributes.unit_of_measurement || '') : '';
 
@@ -87,10 +100,25 @@ class BetterMifloraCard extends HTMLElement {
                 // if state is unavailable/unknown or non-numeric, show the raw state or an indicator
                 displayState = rawState || 'unavailable';
             } else {
-                displayState = `${_stateNum}${_uom}`;
+                // If unit is percent and user prefers a space, add a space before % (common preference)
+                if (_uom === '%') {
+                    displayState = `${_stateNum} ${_uom}`;
+                } else if (_uom) {
+                    // keep previous behavior for other units (no trailing space added)
+                    displayState = `${_stateNum}${_uom}`;
+                } else {
+                    displayState = `${_stateNum}`;
+                }
             }
 
-            const _icon = this._computeIcon(_name, _stateNum);
+            // Choose icon: default computed icon possibly overridden with config, and special dry icon when needed
+            let _icon = this._computeIcon(_name, _stateNum);
+
+            // Custom icon overrides from config: config.custom_icons: { moisture: 'mdi:water-off', battery: 'mdi:battery-variant' }
+            if (config.custom_icons && config.custom_icons[_name]) {
+                _icon = config.custom_icons[_name];
+            }
+
             let _alertStyle = '';
             let _alertIcon = '';
             let moistureInfo = '';
@@ -102,6 +130,10 @@ class BetterMifloraCard extends HTMLElement {
                 } else if (_minMoisture !== null && _stateNum < _minMoisture) {
                     _alertStyle = 'color:var(--error-color, red);';
                     _alertIcon = '▼ ';
+                    // Show a clearer "dry" icon if configured or by default
+                    if (!config.custom_icons || !config.custom_icons.moisture) {
+                        _icon = 'mdi:water-off';
+                    }
                 }
 
                 if (_minMoisture !== null && _maxMoisture !== null) {
@@ -137,6 +169,9 @@ class BetterMifloraCard extends HTMLElement {
                 }
             });
 
+            // Accessibility: show name + state in title
+            sensorEl.title = `${_display_name}: ${displayState}`;
+
             const iconWrap = document.createElement('div');
             iconWrap.className = 'icon';
             const haIcon = document.createElement('ha-icon');
@@ -155,6 +190,18 @@ class BetterMifloraCard extends HTMLElement {
             sensorEl.appendChild(iconWrap);
             sensorEl.appendChild(nameWrap);
             sensorEl.appendChild(stateWrap);
+
+            // Optional secondary info (like last changed), controlled by config.show_last_changed (boolean)
+            if (config.show_last_changed) {
+                const lastChangedRaw = hass.states[_sensor] ? hass.states[_sensor].last_changed : null;
+                if (lastChangedRaw) {
+                    const secondary = document.createElement('div');
+                    secondary.className = 'secondary';
+                    secondary.textContent = `Last: ${this._formatDate(lastChangedRaw)}`;
+                    secondary.style = 'font-size: 0.75rem; color: var(--secondary-text-color); margin-left: 10px;';
+                    sensorEl.appendChild(secondary);
+                }
+            }
 
             sensorsDiv.appendChild(sensorEl);
         }
@@ -228,6 +275,9 @@ class BetterMifloraCard extends HTMLElement {
             }
             .uom {
                 color: var(--secondary-text-color);
+            }
+            .secondary {
+                margin-left: 8px;
             }
             .clearfix::after {
                 content: "";
