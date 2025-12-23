@@ -11,6 +11,11 @@ class BetterMifloraCard extends HTMLElement {
             conductivity: 'mdi:emoticon-poop',
             battery: 'mdi:battery'
         };
+
+        // Keep track of last seen numeric moisture per sensor so we can detect increases (watering)
+        // and the last recorded "watered" timestamp per sensor.
+        this._lastMoisture = {};
+        this._lastWatered = {};
     }
 
     _computeIcon(sensor, state) {
@@ -23,7 +28,6 @@ class BetterMifloraCard extends HTMLElement {
             } else {
                 // Round to nearest 10 and clamp between 0 and 100
                 const tier = Math.min(100, Math.max(0, Math.round(state / 10) * 10));
-                // Ensure we always return a valid mdi-style name; use explicit -100 for 100
                 return `${icon}-${tier}`;
             }
         }
@@ -62,6 +66,30 @@ class BetterMifloraCard extends HTMLElement {
         }
     }
 
+    // add days to ISO/string date
+    _addDays(iso, days) {
+        try {
+            const d = new Date(iso);
+            d.setDate(d.getDate() + days);
+            return d.toISOString();
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // difference in full days (rounded up) between now and futureDate (iso)
+    _daysUntil(iso) {
+        try {
+            const now = new Date();
+            const future = new Date(iso);
+            const diffMs = future - now;
+            const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+            return diffDays;
+        } catch (e) {
+            return null;
+        }
+    }
+
     // Home Assistant will set the hass property when the state of Home Assistant changes.
     set hass(hass) {
         if (!this.config) return;
@@ -71,7 +99,10 @@ class BetterMifloraCard extends HTMLElement {
         const _maxMoisture = this._safeNumber(config.max_moisture);
         const _minMoisture = this._safeNumber(config.min_moisture);
         const _minConductivity = this._safeNumber(config.min_conductivity);
-        const _minTemperature = this._safeNumber(config.min_temperature); // fixed typo
+        const _minTemperature = this._safeNumber(config.min_temperature);
+
+        // delta threshold to consider an increase to be a "watering" event (percent points)
+        const globalDetectDelta = (typeof config.water_detect_delta === 'number') ? config.water_detect_delta : 2;
 
         const container = this.shadowRoot.getElementById('container');
         if (!container) return;
@@ -123,7 +154,23 @@ class BetterMifloraCard extends HTMLElement {
             let _alertIcon = '';
             let moistureInfo = '';
 
+            // Determine per-entity detect delta and watering config
+            const entityWatering = entry.watering || {};
+            const detectDelta = (typeof entityWatering.detect_delta === 'number') ? entityWatering.detect_delta : globalDetectDelta;
+            // interval_days has priority if provided; otherwise a max_per_period/per_period_days implementation would need history which we don't have
+            const intervalDays = (typeof entityWatering.interval_days === 'number') ? entityWatering.interval_days : (typeof config.watering_interval_days === 'number' ? config.watering_interval_days : null);
+
+            // detect moisture increases (watering events)
             if (_name === 'moisture' && _stateNum !== null) {
+                const prev = this._lastMoisture[_sensor];
+                if (prev !== undefined && prev !== null && _stateNum > prev + detectDelta) {
+                    // Consider this a watering event — record timestamp.
+                    const nowIso = new Date().toISOString();
+                    this._lastWatered[_sensor] = nowIso;
+                }
+                // update last moisture reading
+                this._lastMoisture[_sensor] = _stateNum;
+
                 if (_maxMoisture !== null && _stateNum > _maxMoisture) {
                     _alertStyle = 'color:var(--error-color, red);';
                     _alertIcon = '▲ ';
@@ -203,6 +250,59 @@ class BetterMifloraCard extends HTMLElement {
                 }
             }
 
+            // Watering info display: show last watering and next allowed watering (if interval_days configured)
+            if (_name === 'moisture') {
+                const waterInfo = document.createElement('div');
+                waterInfo.className = 'water-info';
+                waterInfo.style = 'font-size:0.8rem; color:var(--secondary-text-color); margin-left:10px; margin-top:4px;';
+
+                const lastWateredIso = this._lastWatered[_sensor];
+                let parts = [];
+                if (lastWateredIso) {
+                    parts.push(`Last watered: ${this._formatDate(lastWateredIso)}`);
+                } else {
+                    parts.push(`Last watered: —`);
+                }
+
+                if (intervalDays !== null && lastWateredIso) {
+                    const nextIso = this._addDays(lastWateredIso, intervalDays);
+                    if (nextIso) {
+                        const daysLeft = this._daysUntil(nextIso);
+                        if (daysLeft <= 0) {
+                            parts.push(`Allowed: now`);
+                        } else {
+                            parts.push(`Next allowed: ${this._formatDate(nextIso)} (${daysLeft} day(s))`);
+                        }
+                    }
+                } else if (intervalDays !== null && !lastWateredIso) {
+                    parts.push(`Next allowed: now`);
+                } else if (entityWatering.max_per_period && entityWatering.period_days) {
+                    // Note: without full history we can only make a best-effort hint (if max_per_period === 1 we treat like interval)
+                    if (entityWatering.max_per_period === 1) {
+                        if (lastWateredIso) {
+                            const nextIso = this._addDays(lastWateredIso, entityWatering.period_days);
+                            const daysLeft = this._daysUntil(nextIso);
+                            if (daysLeft <= 0) {
+                                parts.push(`Allowed: now`);
+                            } else {
+                                parts.push(`Next allowed: ${this._formatDate(nextIso)} (${daysLeft} day(s))`);
+                            }
+                        } else {
+                            parts.push(`Next allowed: now`);
+                        }
+                    } else {
+                        // For more complex counts we can't compute without history - display configuration hint
+                        parts.push(`Watering rule: ${entityWatering.max_per_period}x per ${entityWatering.period_days} days`);
+                    }
+                } else if (config.watering_label) {
+                    // allow a simple label
+                    parts.push(config.watering_label);
+                }
+
+                waterInfo.textContent = parts.join(' · ');
+                sensorEl.appendChild(waterInfo);
+            }
+
             sensorsDiv.appendChild(sensorEl);
         }
     }
@@ -213,6 +313,7 @@ class BetterMifloraCard extends HTMLElement {
             throw new Error('Please define one or more entities in the entities array');
         }
 
+        // Keep existing _lastMoisture / _lastWatered when reconfiguring where possible.
         // Remove previous root child (if any)
         const root = this.shadowRoot;
         if (root.lastChild) root.removeChild(root.lastChild);
@@ -249,6 +350,8 @@ class BetterMifloraCard extends HTMLElement {
                 cursor: pointer;
                 padding-bottom: 10px;
                 align-items: center;
+                flex-direction: row;
+                gap: 6px;
             }
             .sensor:focus {
                 outline: 2px solid var(--paper-item-icon-active-color, #8bc34a);
@@ -278,6 +381,10 @@ class BetterMifloraCard extends HTMLElement {
             }
             .secondary {
                 margin-left: 8px;
+            }
+            .water-info {
+                display: block;
+                margin-left: 10px;
             }
             .clearfix::after {
                 content: "";
