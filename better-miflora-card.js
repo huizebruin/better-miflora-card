@@ -68,27 +68,20 @@ class BetterMifloraCard extends HTMLElement {
     }
 
     // compute progress fill percent and gradient & label color based on configured range
-    // colors: { in_range, below, above } - you can pass custom colors from config (global or per-entity)
     _computeProgress(stateNum, entityMin, entityMax, globalMin, globalMax, colors) {
-        // Determine effective min/max thresholds (priority: entity -> global -> null)
         const min = (typeof entityMin === 'number') ? entityMin : ((typeof globalMin === 'number') ? globalMin : null);
         const max = (typeof entityMax === 'number') ? entityMax : ((typeof globalMax === 'number') ? globalMax : null);
 
         if (stateNum === null || stateNum === undefined || typeof stateNum !== 'number' || isNaN(stateNum)) {
-            // no data
             const fallbackColor = (colors && colors.in_range) ? colors.in_range : 'var(--disabled-text-color, #bbb)';
             return { percent: 0, gradient: `linear-gradient(90deg, ${fallbackColor} 0%, ${fallbackColor} 100%)`, labelColor: fallbackColor };
         }
 
-        // percent is the fill width for current value (absolute 0-100)
         const percent = this._clamp(Math.round(stateNum), 0, 100);
+        const inRangeColor = (colors && colors.in_range) ? colors.in_range : 'var(--paper-item-icon-active-color, #8bc34a)';
+        const belowColor = (colors && colors.below) ? colors.below : 'var(--error-color, #d32f2f)';
+        const aboveColor = (colors && colors.above) ? colors.above : 'var(--accent-color, #ff9800)';
 
-        // Resolve colors with sensible defaults
-        const inRangeColor = (colors && colors.in_range) ? colors.in_range : 'var(--paper-item-icon-active-color, #8bc34a)'; // green
-        const belowColor = (colors && colors.below) ? colors.below : 'var(--error-color, #d32f2f)'; // red
-        const aboveColor = (colors && colors.above) ? colors.above : 'var(--accent-color, #ff9800)'; // amber
-
-        // Decide label color based on where state sits relative to thresholds
         let labelColor = inRangeColor;
         if (min !== null && stateNum < min) {
             labelColor = belowColor;
@@ -98,42 +91,23 @@ class BetterMifloraCard extends HTMLElement {
             labelColor = inRangeColor;
         }
 
-        // Build a smooth gradient that transitions from belowColor -> inRangeColor -> aboveColor
-        // We map threshold points to absolute percent positions (0-100):
-        // - minPos: position of min threshold (if provided) otherwise 0
-        // - maxPos: position of max threshold (if provided) otherwise 100
-        // Ensure ordering minPos <= maxPos
         let minPos = (min !== null) ? this._clamp(min, 0, 100) : 0;
         let maxPos = (max !== null) ? this._clamp(max, 0, 100) : 100;
         if (minPos > maxPos) {
-            // swap to avoid malformed gradient
-            const tmp = minPos;
-            minPos = maxPos;
-            maxPos = tmp;
+            const tmp = minPos; minPos = maxPos; maxPos = tmp;
         }
 
-        // Construct gradient stops with smooth transitions:
-        // belowColor from 0 -> minPos, then transition into inRangeColor between minPos and maxPos, then transition to aboveColor from maxPos -> 100
-        // For a smoother look, we'll add small overlap stops (1% overlap) but clamp them.
-        const overlap = 1; // percent overlap for smooth edge
+        const overlap = 1;
         const stopA = this._clamp(minPos - overlap, 0, 100);
         const stopB = this._clamp(minPos + overlap, 0, 100);
         const stopC = this._clamp(maxPos - overlap, 0, 100);
         const stopD = this._clamp(maxPos + overlap, 0, 100);
 
-        // If min==max, just create a two-color gradient blending below->inRange->above at that point
         let gradient;
         if (min !== null && max !== null && minPos === maxPos) {
-            // single threshold: blend below -> inRange -> above at same point
             gradient = `linear-gradient(90deg, ${belowColor} 0%, ${belowColor} ${minPos}%, ${inRangeColor} ${minPos}%, ${inRangeColor} ${minPos}%, ${aboveColor} ${minPos}%, ${aboveColor} 100%)`;
         } else {
-            gradient = `linear-gradient(90deg,
-                ${belowColor} 0%,
-                ${belowColor} ${stopA}%,
-                ${inRangeColor} ${stopB}%,
-                ${inRangeColor} ${stopC}%,
-                ${aboveColor} ${stopD}%,
-                ${aboveColor} 100%)`.replace(/\s+/g, ' ');
+            gradient = `linear-gradient(90deg, ${belowColor} 0%, ${belowColor} ${stopA}%, ${inRangeColor} ${stopB}%, ${inRangeColor} ${stopC}%, ${aboveColor} ${stopD}%, ${aboveColor} 100%)`;
         }
 
         return { percent, gradient, labelColor };
@@ -144,14 +118,11 @@ class BetterMifloraCard extends HTMLElement {
         if (!this.config) return;
         const config = this.config;
 
-        // prepare thresholds with safe parsing and defaults
         const _globalMaxMoisture = this._safeNumber(config.max_moisture);
         const _globalMinMoisture = this._safeNumber(config.min_moisture);
         const _minConductivity = this._safeNumber(config.min_conductivity);
         const _minTemperature = this._safeNumber(config.min_temperature);
 
-        // read optional global colors from config (you can set these in your card config)
-        // Example: color_in_range: '#3fbf3f', color_below: '#d32f2f', color_above: '#ffb300'
         const globalColorConfig = {
             in_range: config.color_in_range || null,
             below: config.color_below || null,
@@ -161,7 +132,6 @@ class BetterMifloraCard extends HTMLElement {
         const container = this.shadowRoot.getElementById('container');
         if (!container) return;
 
-        // reset sensors container
         const sensorsDiv = this.shadowRoot.getElementById('sensors');
         sensorsDiv.innerHTML = '';
 
@@ -182,24 +152,18 @@ class BetterMifloraCard extends HTMLElement {
 
             let displayState;
             if (_stateNum === null) {
-                // if state is unavailable/unknown or non-numeric, show the raw state or an indicator
                 displayState = rawState || 'unavailable';
             } else {
-                // If unit is percent and user prefers a space, add a space before % (common preference)
                 if (_uom === '%') {
                     displayState = `${_stateNum} ${_uom}`;
                 } else if (_uom) {
-                    // keep previous behavior for other units (no trailing space added)
                     displayState = `${_stateNum}${_uom}`;
                 } else {
                     displayState = `${_stateNum}`;
                 }
             }
 
-            // Choose icon: default computed icon possibly overridden with config, and special dry icon when needed
             let _icon = this._computeIcon(_name, _stateNum);
-
-            // Custom icon overrides from config: config.custom_icons: { moisture: 'mdi:water-off', battery: 'mdi:battery-variant' }
             if (config.custom_icons && config.custom_icons[_name]) {
                 _icon = config.custom_icons[_name];
             }
@@ -208,18 +172,15 @@ class BetterMifloraCard extends HTMLElement {
             let _alertIcon = '';
             let moistureInfo = '';
 
-            // per-entity min/max (allow entity-level overrides)
             const entityMin = (typeof entry.min_moisture === 'number') ? entry.min_moisture : null;
             const entityMax = (typeof entry.max_moisture === 'number') ? entry.max_moisture : null;
 
-            // per-entity color overrides (optional)
             const entryColors = {
                 in_range: entry.color_in_range || null,
                 below: entry.color_below || null,
                 above: entry.color_above || null
             };
 
-            // Determine effective min/max to decide alert and moisture info
             if (_name === 'moisture' && _stateNum !== null) {
                 const effectiveMin = (entityMin !== null) ? entityMin : _globalMinMoisture;
                 const effectiveMax = (entityMax !== null) ? entityMax : _globalMaxMoisture;
@@ -230,7 +191,6 @@ class BetterMifloraCard extends HTMLElement {
                 } else if (effectiveMin !== null && _stateNum < effectiveMin) {
                     _alertStyle = 'color:var(--error-color, red);';
                     _alertIcon = '▼ ';
-                    // Show a clearer "dry" icon if configured or by default
                     if (!config.custom_icons || !config.custom_icons.moisture) {
                         _icon = 'mdi:water-off';
                     }
@@ -273,7 +233,6 @@ class BetterMifloraCard extends HTMLElement {
                 }
             });
 
-            // Accessibility: show name + state in title
             sensorEl.title = `${_display_name}: ${displayState}`;
 
             const sensorRow = document.createElement('div');
@@ -289,7 +248,6 @@ class BetterMifloraCard extends HTMLElement {
             nameWrap.className = 'name';
             nameWrap.textContent = `${_display_name}${moistureInfo}`;
 
-            // compact mode: global or per-entity
             const compactGlobal = Boolean(config.compact);
             const compactEntity = Boolean(entry.compact);
             const compact = compactEntity || compactGlobal;
@@ -301,16 +259,14 @@ class BetterMifloraCard extends HTMLElement {
 
             sensorRow.appendChild(iconWrap);
             sensorRow.appendChild(nameWrap);
-            // show state only when not compact
             if (!compact) {
                 sensorRow.appendChild(stateWrap);
             }
 
             sensorEl.appendChild(sensorRow);
 
-            // Progress bar for moisture sensors (based on card inputs)
+            // Progress bar for moisture sensors
             if (_name === 'moisture') {
-                // merge global and entry colors, entry takes precedence
                 const mergedColors = {
                     in_range: entryColors.in_range || globalColorConfig.in_range || null,
                     below: entryColors.below || globalColorConfig.below || null,
@@ -328,7 +284,6 @@ class BetterMifloraCard extends HTMLElement {
                 const progressFill = document.createElement('div');
                 progressFill.className = 'progress-fill';
                 progressFill.style.width = `${percent}%`;
-                // apply gradient as the fill background
                 progressFill.style.background = gradient;
                 progressFill.setAttribute('aria-valuenow', percent);
                 progressFill.setAttribute('aria-valuemin', 0);
@@ -338,9 +293,7 @@ class BetterMifloraCard extends HTMLElement {
 
                 const progressLabel = document.createElement('div');
                 progressLabel.className = 'progress-label';
-                // in compact mode show only percent number (no unit clutter)
                 progressLabel.textContent = (typeof _stateNum === 'number' && !isNaN(_stateNum)) ? (compact ? `${_stateNum}${_uom ? ' ' + _uom : ''}` : `${_stateNum} ${_uom || '%'}`) : '—';
-                // color the label to reflect its zone for readability
                 progressLabel.style.color = labelColor;
 
                 progressWrap.appendChild(progressBar);
@@ -349,7 +302,6 @@ class BetterMifloraCard extends HTMLElement {
                 sensorEl.appendChild(progressWrap);
             }
 
-            // Optional secondary info (like last changed), controlled by config.show_last_changed (boolean)
             if (!compact && config.show_last_changed) {
                 const lastChangedRaw = hass.states[_sensor] ? hass.states[_sensor].last_changed : null;
                 if (lastChangedRaw) {
@@ -380,7 +332,6 @@ class BetterMifloraCard extends HTMLElement {
         // container elements
         const card = document.createElement('ha-card');
         const content = document.createElement('div');
-        const plantimage = document.createElement('div');
         const style = document.createElement('style');
 
         style.textContent = `
@@ -392,16 +343,48 @@ class BetterMifloraCard extends HTMLElement {
             ha-card .header {
                 width: 100%;
             }
+
+            /* Main content: text on the left, image on the right */
+            .content {
+                display: flex;
+                align-items: flex-start;
+                gap: 12px;
+            }
+            .info {
+                flex: 1 1 auto;
+                min-width: 0; /* allow ellipsis on .name */
+            }
+            .image-wrapper {
+                flex: 0 0 125px;
+                display: flex;
+                align-items: flex-start;
+                justify-content: center;
+            }
             .image {
-                float: right;
-                margin-left: 15px;
-                margin-right: 15px;
-                margin-bottom: 15px;
                 width: 125px;
                 height: 125px;
                 border-radius: 6px;
                 object-fit: cover;
+                margin: 0;
             }
+
+            /* Mobile: stack vertically with image above text */
+            @media (max-width: 600px) {
+                .content {
+                    flex-direction: column;
+                    align-items: center;
+                }
+                .image-wrapper {
+                    width: 100%;
+                }
+                .image {
+                    margin: 0 auto 12px auto;
+                }
+                .info {
+                    width: 100%;
+                }
+            }
+
             .sensor {
                 display: block;
                 cursor: pointer;
@@ -446,18 +429,13 @@ class BetterMifloraCard extends HTMLElement {
             .progress-wrap {
                 display: flex;
                 align-items: center;
-                gap: 6px;               /* compact spacing */
-                margin-left: 10px;
-                margin-top: 6px;
-            }
-            .progress-wrap.compact {
-                margin-left: 10px;
+                gap: 6px;
                 margin-top: 6px;
             }
             .progress {
                 background: rgba(0,0,0,0.06);
                 border-radius: 6px;
-                height: 6px;            /* bar height */
+                height: 6px;
                 width: calc(100% - 90px);
                 overflow: hidden;
                 flex: 1 1 auto;
@@ -465,13 +443,13 @@ class BetterMifloraCard extends HTMLElement {
             .progress-fill {
                 height: 100%;
                 width: 0%;
-                border-radius: 4px;     /* slightly smaller radius to match thinner bar */
+                border-radius: 4px;
                 transition: width 300ms ease, background 300ms ease;
             }
             .progress-label {
-                min-width: 48px;        /* smaller label width to reduce overall size */
+                min-width: 48px;
                 text-align: right;
-                font-size: 0.8rem;      /* slightly smaller text */
+                font-size: 0.8rem;
                 color: var(--secondary-text-color);
             }
             .clearfix::after {
@@ -486,17 +464,21 @@ class BetterMifloraCard extends HTMLElement {
             }
         `;
 
-        plantimage.innerHTML = config.image ? `<img class="image" src="/local/${config.image}" alt="${config.title || 'plant image'}">` : '';
-
+        // Build the content with an info column (sensors) on the left and the image on the right
+        const imageHtml = this.config.image ? `<img class="image" src="/local/${this.config.image}" alt="${this.config.title || 'plant image'}">` : '';
         content.id = "container";
         content.innerHTML = `
             <div class="content clearfix">
-                <div id="sensors"></div>
+                <div class="info">
+                    <div id="sensors"></div>
+                </div>
+                <div class="image-wrapper">
+                    ${imageHtml}
+                </div>
             </div>
         `;
 
         card.header = config.title || '';
-        card.appendChild(plantimage);
         card.appendChild(content);
         card.appendChild(style);
         root.appendChild(card);
