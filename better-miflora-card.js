@@ -363,18 +363,18 @@ class BetterMifloraCard extends HTMLElement {
       }
     `;
 
-    content.id = 'container';
-    content.className = 'content clearfix';
-    
-    // Add image if configured - inside content div
+    // Add image if configured
     if (this.config.image) {
       const plantimage = document.createElement('img');
       plantimage.className = 'image';
       plantimage.src = `/local/${this.config.image}`;
       plantimage.alt = this.config.title || 'Plant image';
       plantimage.loading = 'lazy';
-      content.appendChild(plantimage);
+      card.appendChild(plantimage);
     }
+
+    content.id = 'container';
+    content.className = 'content clearfix';
     
     const sensorsDiv = document.createElement('div');
     sensorsDiv.id = 'sensors';
