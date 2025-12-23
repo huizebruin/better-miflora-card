@@ -1,4 +1,4 @@
-/* Enhanced better-miflora-card with improved icon rendering and reliability */
+/* Enhanced better-miflora-card with threshold alerts and battery icons */
 class BetterMifloraCard extends HTMLElement {
   constructor() {
     super();
@@ -12,8 +12,7 @@ class BetterMifloraCard extends HTMLElement {
       illuminance: 'mdi:white-balance-sunny',
       conductivity: 'mdi:emoticon-poop',
       battery: 'mdi:battery',
-      humidity: 'mdi:water-percent',
-      dry: 'mdi:water-off'
+      humidity: 'mdi:water-percent'
     };
 
     // Wait for ha-icon to be available
@@ -31,12 +30,14 @@ class BetterMifloraCard extends HTMLElement {
 
   _computeIcon(sensor, state) {
     const configured = this.config?.custom_icons?.[sensor];
-    const base = configured || this.sensors[sensor] || '';
+    const base = configured || this.sensors[sensor] || 'mdi:circle';
     
     if (sensor === 'battery' && typeof state === 'number' && !isNaN(state)) {
-      if (state <= 5) return `${base}-alert`;
-      const tier = Math.min(100, Math.max(0, Math.round(state / 10) * 10));
-      return `${base}-${tier}`;
+      if (state <= 5) {
+        return `${base}-alert`;
+      } else if (state < 95) {
+        return `${base}-${Math.round((state / 10) - 0.01) * 10}`;
+      }
     }
     return base;
   }
@@ -78,61 +79,15 @@ class BetterMifloraCard extends HTMLElement {
     }
   }
 
-  _clamp(v, a, b) { 
-    return Math.max(a, Math.min(b, v)); 
-  }
-
-  _computeProgress(stateNum, entityMin, entityMax, globalMin, globalMax, colors) {
-    const min = this._safeNumber(entityMin) ?? this._safeNumber(globalMin);
-    const max = this._safeNumber(entityMax) ?? this._safeNumber(globalMax);
-
-    if (stateNum === null || stateNum === undefined || typeof stateNum !== 'number' || isNaN(stateNum)) {
-      const fallback = colors?.in_range || 'var(--disabled-text-color, #bbb)';
-      return { 
-        percent: 0, 
-        gradient: `linear-gradient(90deg, ${fallback} 0%, ${fallback} 100%)`, 
-        labelColor: fallback 
-      };
-    }
-
-    const percent = this._clamp(Math.round(stateNum), 0, 100);
-    const inRangeColor = colors?.in_range || 'var(--paper-item-icon-active-color, #8bc34a)';
-    const belowColor = colors?.below || 'var(--error-color, #d32f2f)';
-    const aboveColor = colors?.above || 'var(--accent-color, #ff9800)';
-    
-    let labelColor = inRangeColor;
-    if (min !== null && stateNum < min) labelColor = belowColor;
-    else if (max !== null && stateNum > max) labelColor = aboveColor;
-
-    let minPos = (min !== null) ? this._clamp(min, 0, 100) : 0;
-    let maxPos = (max !== null) ? this._clamp(max, 0, 100) : 100;
-    if (minPos > maxPos) [minPos, maxPos] = [maxPos, minPos];
-
-    const overlap = 1;
-    const stopA = this._clamp(minPos - overlap, 0, 100);
-    const stopB = this._clamp(minPos + overlap, 0, 100);
-    const stopC = this._clamp(maxPos - overlap, 0, 100);
-    const stopD = this._clamp(maxPos + overlap, 0, 100);
-
-    let gradient;
-    if (min !== null && max !== null && minPos === maxPos) {
-      gradient = `linear-gradient(90deg, ${belowColor} 0%, ${belowColor} ${minPos}%, ${inRangeColor} ${minPos}%, ${aboveColor} ${minPos}%, ${aboveColor} 100%)`;
-    } else {
-      gradient = `linear-gradient(90deg, ${belowColor} 0%, ${belowColor} ${stopA}%, ${inRangeColor} ${stopB}%, ${inRangeColor} ${stopC}%, ${aboveColor} ${stopD}%, ${aboveColor} 100%)`;
-    }
-    
-    return { percent, gradient, labelColor };
-  }
-
   _createIcon(iconName, color = null) {
     const haIcon = document.createElement('ha-icon');
     haIcon.setAttribute('icon', iconName);
     
     // Apply inline styles for maximum compatibility
     const styles = {
-      '--mdc-icon-size': '20px',
-      'width': '20px',
-      'height': '20px',
+      '--mdc-icon-size': '24px',
+      'width': '24px',
+      'height': '24px',
       'display': 'inline-flex',
       'align-items': 'center',
       'justify-content': 'center',
@@ -149,53 +104,80 @@ class BetterMifloraCard extends HTMLElement {
     return haIcon;
   }
 
+  _getAlertInfo(type, stateNum, config) {
+    const maxMoisture = this._safeNumber(config.max_moisture);
+    const minMoisture = this._safeNumber(config.min_moisture);
+    const minConductivity = this._safeNumber(config.min_conductivity);
+    const minTemperature = this._safeNumber(config.min_termperature);
+    
+    let alertStyle = '';
+    let alertIcon = '';
+    let rangeInfo = '';
+    
+    if (type === 'moisture') {
+      if (maxMoisture !== null && stateNum > maxMoisture) {
+        alertStyle = 'color: var(--error-color, red); font-weight: 600;';
+        alertIcon = '▲ ';
+      } else if (minMoisture !== null && stateNum < minMoisture) {
+        alertStyle = 'color: var(--error-color, red); font-weight: 600;';
+        alertIcon = '▼ ';
+      }
+      
+      if (minMoisture !== null && maxMoisture !== null) {
+        rangeInfo = ` (${minMoisture}% - ${maxMoisture}%)`;
+      }
+    }
+    
+    if (type === 'conductivity' && minConductivity !== null && stateNum < minConductivity) {
+      alertStyle = 'color: var(--error-color, red); font-weight: 600;';
+      alertIcon = '▼ ';
+    }
+    
+    if (type === 'temperature' && minTemperature !== null && stateNum < minTemperature) {
+      alertStyle = 'color: var(--error-color, red); font-weight: 600;';
+      alertIcon = '▼ ';
+    }
+    
+    return { alertStyle, alertIcon, rangeInfo };
+  }
+
   _render() {
     if (!this._initialized || !this.config || !this._hass) return;
 
     const config = this.config;
     const hass = this._hass;
-    const globalMin = this._safeNumber(config.min_moisture);
-    const globalMax = this._safeNumber(config.max_moisture);
-    const globalColors = { 
-      in_range: config.color_in_range || null, 
-      below: config.color_below || null, 
-      above: config.color_above || null 
-    };
 
     const sensorsDiv = this.shadowRoot.getElementById('sensors');
     if (!sensorsDiv) return;
     
     sensorsDiv.innerHTML = '';
 
-    let anyDry = false;
-
     for (let i = 0; i < config.entities.length; i++) {
       const entry = config.entities[i];
       const type = entry.type;
       const entity = entry.entity;
-      const displayName = entry.name || (type ? (type[0].toUpperCase() + type.slice(1)) : 'Unknown');
       const entityState = hass.states[entity];
-      const rawState = entityState?.state || null;
+      
+      // Display name
+      const displayName = entry.name || (type ? (type[0].toUpperCase() + type.slice(1)) : 'Unknown');
+      
+      // Get state
+      let rawState = entityState?.state || null;
       const stateNum = this._safeNumber(rawState);
       const uom = entityState?.attributes?.unit_of_measurement || '';
       
-      let displayState = stateNum === null 
-        ? (rawState || 'unavailable') 
-        : uom === '%' 
-          ? `${stateNum} ${uom}` 
-          : uom 
-            ? `${stateNum}${uom}` 
-            : `${stateNum}`;
+      let displayState;
+      if (stateNum === null) {
+        displayState = rawState || 'unavailable';
+      } else {
+        displayState = `${stateNum}${uom}`;
+      }
 
-      // Determine icon
-      let icon = this._computeIcon(type, stateNum);
-      if ((!icon || icon === '') && type === 'humidity') {
-        icon = config.custom_icons?.humidity || this.sensors.humidity;
-      }
-      if (!icon) {
-        icon = 'mdi:circle';
-        console.warn(`better-miflora-card: Missing icon for type "${type}" on entity "${entity}". Using fallback.`);
-      }
+      // Get icon
+      const icon = this._computeIcon(type, stateNum);
+
+      // Get alert info based on thresholds
+      const { alertStyle, alertIcon, rangeInfo } = this._getAlertInfo(type, stateNum, config);
 
       // Build sensor element
       const sensorEl = document.createElement('div');
@@ -212,49 +194,31 @@ class BetterMifloraCard extends HTMLElement {
       });
       sensorEl.title = `${displayName}: ${displayState}`;
 
-      // Sensor row
-      const sensorRow = document.createElement('div');
-      sensorRow.className = 'sensor-row';
-
       // Icon
       const iconWrap = document.createElement('div');
       iconWrap.className = 'icon';
       const haIcon = this._createIcon(icon);
       iconWrap.appendChild(haIcon);
 
-      // Name
+      // Name with range info
       const nameWrap = document.createElement('div');
       nameWrap.className = 'name';
-      nameWrap.textContent = displayName;
+      nameWrap.textContent = `${displayName}${rangeInfo}`;
 
-      // State (if not compact)
-      const compactGlobal = Boolean(config.compact);
-      const compactEntity = Boolean(entry.compact);
-      const compact = compactEntity || compactGlobal;
-      
-      if (!compact) {
-        const stateWrap = document.createElement('div');
-        stateWrap.className = 'state';
-        stateWrap.textContent = displayState;
-        sensorRow.appendChild(iconWrap);
-        sensorRow.appendChild(nameWrap);
-        sensorRow.appendChild(stateWrap);
-      } else {
-        sensorRow.appendChild(iconWrap);
-        sensorRow.appendChild(nameWrap);
+      // State with alert styling
+      const stateWrap = document.createElement('div');
+      stateWrap.className = 'state';
+      if (alertStyle) {
+        stateWrap.style.cssText = alertStyle;
       }
+      stateWrap.innerHTML = `${alertIcon}${displayState}`;
 
-      sensorEl.appendChild(sensorRow);
-
-      // Check for dry condition (moisture only)
-      if (type === 'moisture') {
-        const entMin = this._safeNumber(entry.min_moisture);
-        if (entMin !== null && stateNum !== null && stateNum < entMin) {
-          anyDry = true;
-        }
-      }
+      sensorEl.appendChild(iconWrap);
+      sensorEl.appendChild(nameWrap);
+      sensorEl.appendChild(stateWrap);
 
       // Last changed (if enabled)
+      const compact = Boolean(config.compact);
       if (!compact && config.show_last_changed) {
         const lastChangedRaw = entityState?.last_changed;
         if (lastChangedRaw) {
@@ -267,26 +231,6 @@ class BetterMifloraCard extends HTMLElement {
 
       sensorsDiv.appendChild(sensorEl);
     }
-
-    // Update dry status badge
-    const statusEl = this.shadowRoot.getElementById('status');
-    if (statusEl) {
-      if (anyDry) {
-        statusEl.innerHTML = '';
-        const dryIcon = config.custom_icons?.dry || this.sensors.dry;
-        const iconEl = this._createIcon(dryIcon, '#fff');
-        statusEl.appendChild(iconEl);
-        
-        const textSpan = document.createElement('span');
-        textSpan.textContent = 'Dry';
-        statusEl.appendChild(textSpan);
-        
-        statusEl.style.display = 'inline-flex';
-      } else {
-        statusEl.innerHTML = '';
-        statusEl.style.display = 'none';
-      }
-    }
   }
 
   set hass(hass) {
@@ -295,8 +239,8 @@ class BetterMifloraCard extends HTMLElement {
   }
 
   setConfig(config) {
-    if (!config.entities || !Array.isArray(config.entities) || config.entities.length === 0) {
-      throw new Error('Please define one or more entities in the entities array');
+    if (!config.entities) {
+      throw new Error('Please define an entity');
     }
 
     this.config = config;
@@ -307,7 +251,6 @@ class BetterMifloraCard extends HTMLElement {
     const card = document.createElement('ha-card');
     const content = document.createElement('div');
     const style = document.createElement('style');
-    const status = document.createElement('div');
 
     style.textContent = `
       ha-card { 
@@ -331,28 +274,21 @@ class BetterMifloraCard extends HTMLElement {
       
       .sensor { 
         display: flex; 
-        flex-direction: column;
+        align-items: center;
         cursor: pointer; 
-        padding: 12px 0; 
+        padding: 12px 8px; 
         border-bottom: 1px solid var(--divider-color, rgba(0,0,0,0.06));
         transition: background-color 0.2s ease;
+        flex-wrap: wrap;
       }
       
       .sensor:hover {
         background-color: var(--secondary-background-color, rgba(0,0,0,0.02));
         border-radius: 8px;
-        padding-left: 8px;
-        padding-right: 8px;
       }
       
       .sensor:last-child {
         border-bottom: none;
-      }
-      
-      .sensor-row {
-        display: flex;
-        align-items: center;
-        width: 100%;
       }
       
       .icon { 
@@ -369,11 +305,11 @@ class BetterMifloraCard extends HTMLElement {
       /* Critical: Force ha-icon visibility */
       ha-icon {
         display: inline-flex !important;
-        width: 20px !important;
-        height: 20px !important;
-        min-width: 20px !important;
-        min-height: 20px !important;
-        --mdc-icon-size: 20px !important;
+        width: 24px !important;
+        height: 24px !important;
+        min-width: 24px !important;
+        min-height: 24px !important;
+        --mdc-icon-size: 24px !important;
       }
       
       .icon ha-icon {
@@ -384,6 +320,10 @@ class BetterMifloraCard extends HTMLElement {
         flex: 1;
         font-weight: 500;
         color: var(--primary-text-color);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        margin-top: 3px;
       }
       
       .state { 
@@ -391,9 +331,11 @@ class BetterMifloraCard extends HTMLElement {
         font-weight: 500;
         color: var(--secondary-text-color);
         white-space: nowrap;
+        margin-top: 3px;
       }
       
       .secondary { 
+        width: 100%;
         margin-top: 6px;
         margin-left: 36px;
         font-size: 0.75rem;
@@ -406,30 +348,6 @@ class BetterMifloraCard extends HTMLElement {
         clear: both;
         display: table;
       }
-      
-      .status { 
-        position: absolute;
-        right: 12px;
-        top: 12px;
-        display: none;
-        background: var(--error-color, #d32f2f);
-        color: #fff;
-        padding: 6px 12px;
-        border-radius: 16px;
-        font-size: 0.75rem;
-        font-weight: 600;
-        z-index: 10;
-        align-items: center;
-        gap: 6px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-      }
-      
-      .status ha-icon {
-        color: #fff !important;
-        width: 16px !important;
-        height: 16px !important;
-        --mdc-icon-size: 16px !important;
-      }
 
       #container {
         position: relative;
@@ -438,6 +356,10 @@ class BetterMifloraCard extends HTMLElement {
       #sensors {
         display: flex;
         flex-direction: column;
+      }
+      
+      .content {
+        clear: both;
       }
     `;
 
@@ -458,11 +380,7 @@ class BetterMifloraCard extends HTMLElement {
     sensorsDiv.id = 'sensors';
     content.appendChild(sensorsDiv);
 
-    status.id = 'status';
-    status.className = 'status';
-
     card.header = config.title || '';
-    card.appendChild(status);
     card.appendChild(content);
     card.appendChild(style);
     root.appendChild(card);
@@ -474,7 +392,7 @@ class BetterMifloraCard extends HTMLElement {
   }
 
   getCardSize() { 
-    return this.config?.entities?.length || 2; 
+    return 2;
   }
 }
 
