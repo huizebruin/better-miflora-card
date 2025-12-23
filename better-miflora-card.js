@@ -60,9 +60,20 @@ class BetterMifloraCard extends HTMLElement {
 
     _formatDate(iso) {
         try {
-            return new Date(iso).toLocaleString();
+            const d = new Date(iso);
+            if (Number.isNaN(d.getTime())) return iso;
+            return d.toLocaleString();
         } catch (e) {
             return iso;
+        }
+    }
+
+    _isValidDate(iso) {
+        try {
+            const d = new Date(iso);
+            return !Number.isNaN(d.getTime());
+        } catch (e) {
+            return false;
         }
     }
 
@@ -90,14 +101,48 @@ class BetterMifloraCard extends HTMLElement {
         }
     }
 
+    // compute progress fill percent and color based on configured range
+    _computeProgress(stateNum, entityMin, entityMax, globalMin, globalMax) {
+        // Determine effective min/max (priority: entity -> global -> default)
+        const min = (typeof entityMin === 'number') ? entityMin : ((typeof globalMin === 'number') ? globalMin : null);
+        const max = (typeof entityMax === 'number') ? entityMax : ((typeof globalMax === 'number') ? globalMax : null);
+
+        if (stateNum === null || stateNum === undefined || typeof stateNum !== 'number' || isNaN(stateNum)) {
+            return { percent: 0, color: 'var(--disabled-text-color, #bbb)' };
+        }
+
+        let percent = 0;
+        if (min !== null && max !== null && (max !== min)) {
+            // fill is relative to the configured range
+            percent = ((stateNum - min) / (max - min)) * 100;
+        } else {
+            // fallback to direct percent (assume 0-100)
+            percent = stateNum;
+        }
+        // clamp
+        percent = Math.max(0, Math.min(100, percent));
+
+        // color: below min => red, between => green, above max => orange
+        let color = 'var(--paper-item-icon-active-color, #8bc34a)'; // green default
+        if (min !== null && stateNum < min) {
+            color = 'var(--error-color, #d32f2f)'; // red
+        } else if (max !== null && stateNum > max) {
+            color = 'var(--accent-color, #ff9800)'; // orange
+        } else {
+            color = 'var(--paper-item-icon-active-color, #8bc34a)'; // green
+        }
+
+        return { percent: Math.round(percent), color };
+    }
+
     // Home Assistant will set the hass property when the state of Home Assistant changes.
     set hass(hass) {
         if (!this.config) return;
         const config = this.config;
 
         // prepare thresholds with safe parsing and defaults
-        const _maxMoisture = this._safeNumber(config.max_moisture);
-        const _minMoisture = this._safeNumber(config.min_moisture);
+        const _globalMaxMoisture = this._safeNumber(config.max_moisture);
+        const _globalMinMoisture = this._safeNumber(config.min_moisture);
         const _minConductivity = this._safeNumber(config.min_conductivity);
         const _minTemperature = this._safeNumber(config.min_temperature);
 
@@ -157,8 +202,11 @@ class BetterMifloraCard extends HTMLElement {
             // Determine per-entity detect delta and watering config
             const entityWatering = entry.watering || {};
             const detectDelta = (typeof entityWatering.detect_delta === 'number') ? entityWatering.detect_delta : globalDetectDelta;
-            // interval_days has priority if provided; otherwise a max_per_period/per_period_days implementation would need history which we don't have
             const intervalDays = (typeof entityWatering.interval_days === 'number') ? entityWatering.interval_days : (typeof config.watering_interval_days === 'number' ? config.watering_interval_days : null);
+
+            // per-entity min/max (allow entity-level overrides)
+            const entityMin = (typeof entry.min_moisture === 'number') ? entry.min_moisture : null;
+            const entityMax = (typeof entry.max_moisture === 'number') ? entry.max_moisture : null;
 
             // detect moisture increases (watering events)
             if (_name === 'moisture' && _stateNum !== null) {
@@ -171,10 +219,14 @@ class BetterMifloraCard extends HTMLElement {
                 // update last moisture reading
                 this._lastMoisture[_sensor] = _stateNum;
 
-                if (_maxMoisture !== null && _stateNum > _maxMoisture) {
+                // use effective min/max to decide alert
+                const effectiveMin = (entityMin !== null) ? entityMin : _globalMinMoisture;
+                const effectiveMax = (entityMax !== null) ? entityMax : _globalMaxMoisture;
+
+                if (effectiveMax !== null && _stateNum > effectiveMax) {
                     _alertStyle = 'color:var(--error-color, red);';
                     _alertIcon = '▲ ';
-                } else if (_minMoisture !== null && _stateNum < _minMoisture) {
+                } else if (effectiveMin !== null && _stateNum < effectiveMin) {
                     _alertStyle = 'color:var(--error-color, red);';
                     _alertIcon = '▼ ';
                     // Show a clearer "dry" icon if configured or by default
@@ -183,8 +235,12 @@ class BetterMifloraCard extends HTMLElement {
                     }
                 }
 
-                if (_minMoisture !== null && _maxMoisture !== null) {
-                    moistureInfo = ` (${_minMoisture}% - ${_maxMoisture}%)`;
+                if ((entityMin !== null && entityMax !== null) || (_globalMinMoisture !== null && _globalMaxMoisture !== null)) {
+                    const showMin = (entityMin !== null) ? entityMin : _globalMinMoisture;
+                    const showMax = (entityMax !== null) ? entityMax : _globalMaxMoisture;
+                    if (showMin !== null && showMax !== null) {
+                        moistureInfo = ` (${showMin}% - ${showMax}%)`;
+                    }
                 }
             }
 
@@ -219,6 +275,9 @@ class BetterMifloraCard extends HTMLElement {
             // Accessibility: show name + state in title
             sensorEl.title = `${_display_name}: ${displayState}`;
 
+            const sensorRow = document.createElement('div');
+            sensorRow.className = 'sensor-row';
+
             const iconWrap = document.createElement('div');
             iconWrap.className = 'icon';
             const haIcon = document.createElement('ha-icon');
@@ -234,9 +293,41 @@ class BetterMifloraCard extends HTMLElement {
             stateWrap.style = _alertStyle;
             stateWrap.innerHTML = `${_alertIcon}${displayState}`;
 
-            sensorEl.appendChild(iconWrap);
-            sensorEl.appendChild(nameWrap);
-            sensorEl.appendChild(stateWrap);
+            sensorRow.appendChild(iconWrap);
+            sensorRow.appendChild(nameWrap);
+            sensorRow.appendChild(stateWrap);
+
+            sensorEl.appendChild(sensorRow);
+
+            // Progress bar for moisture sensors (based on card inputs)
+            if (_name === 'moisture') {
+                const { percent, color } = this._computeProgress(_stateNum, entityMin, entityMax, _globalMinMoisture, _globalMaxMoisture);
+
+                const progressWrap = document.createElement('div');
+                progressWrap.className = 'progress-wrap';
+
+                const progressBar = document.createElement('div');
+                progressBar.className = 'progress';
+
+                const progressFill = document.createElement('div');
+                progressFill.className = 'progress-fill';
+                progressFill.style.width = `${percent}%`;
+                progressFill.style.background = color;
+                progressFill.setAttribute('aria-valuenow', percent);
+                progressFill.setAttribute('aria-valuemin', 0);
+                progressFill.setAttribute('aria-valuemax', 100);
+                progressFill.setAttribute('role', 'progressbar');
+                progressBar.appendChild(progressFill);
+
+                const progressLabel = document.createElement('div');
+                progressLabel.className = 'progress-label';
+                progressLabel.textContent = (typeof _stateNum === 'number' && !isNaN(_stateNum)) ? `${_stateNum} ${_uom || '%'}` : '—';
+
+                progressWrap.appendChild(progressBar);
+                progressWrap.appendChild(progressLabel);
+
+                sensorEl.appendChild(progressWrap);
+            }
 
             // Optional secondary info (like last changed), controlled by config.show_last_changed (boolean)
             if (config.show_last_changed) {
@@ -252,55 +343,42 @@ class BetterMifloraCard extends HTMLElement {
 
             // Watering info display: show last watering and next allowed watering (if interval_days configured)
             if (_name === 'moisture') {
-                const waterInfo = document.createElement('div');
-                waterInfo.className = 'water-info';
-                waterInfo.style = 'font-size:0.8rem; color:var(--secondary-text-color); margin-left:10px; margin-top:4px;';
-
-                const lastWateredIso = this._lastWatered[_sensor];
-                let parts = [];
-                if (lastWateredIso) {
-                    parts.push(`Last watered: ${this._formatDate(lastWateredIso)}`);
-                } else {
-                    parts.push(`Last watered: —`);
+                // Determine lastWateredIso: priority -> configured persistent entity -> in-memory detected timestamp
+                let lastWateredIso = null;
+                if (entityWatering && entityWatering.last_watered_entity && hass.states[entityWatering.last_watered_entity]) {
+                    const candidate = hass.states[entityWatering.last_watered_entity].state;
+                    if (this._isValidDate(candidate)) {
+                        lastWateredIso = candidate;
+                    }
+                }
+                if (!lastWateredIso && this._lastWatered[_sensor]) {
+                    lastWateredIso = this._lastWatered[_sensor];
                 }
 
-                if (intervalDays !== null && lastWateredIso) {
+                const waterLine = document.createElement('div');
+                waterLine.className = 'water-line';
+
+                if (lastWateredIso && this._isValidDate(lastWateredIso)) {
+                    waterLine.textContent = `Watered: ${this._formatDate(lastWateredIso)}`;
+                } else {
+                    waterLine.textContent = `Watered: —`;
+                }
+
+                sensorEl.appendChild(waterLine);
+
+                // Add next-allowed hint if intervalDays is set and we have a lastWateredIso
+                if (intervalDays !== null && lastWateredIso && this._isValidDate(lastWateredIso)) {
                     const nextIso = this._addDays(lastWateredIso, intervalDays);
                     if (nextIso) {
                         const daysLeft = this._daysUntil(nextIso);
-                        if (daysLeft <= 0) {
-                            parts.push(`Allowed: now`);
-                        } else {
-                            parts.push(`Next allowed: ${this._formatDate(nextIso)} (${daysLeft} day(s))`);
-                        }
+                        const nextText = (daysLeft <= 0) ? 'Next allowed: now' : `Next allowed: ${this._formatDate(nextIso)} (${daysLeft} day(s))`;
+                        const nextEl = document.createElement('div');
+                        nextEl.className = 'water-next';
+                        nextEl.style = 'font-size:0.8rem; color:var(--secondary-text-color); margin-left:10px; margin-top:2px;';
+                        nextEl.textContent = nextText;
+                        sensorEl.appendChild(nextEl);
                     }
-                } else if (intervalDays !== null && !lastWateredIso) {
-                    parts.push(`Next allowed: now`);
-                } else if (entityWatering.max_per_period && entityWatering.period_days) {
-                    // Note: without full history we can only make a best-effort hint (if max_per_period === 1 we treat like interval)
-                    if (entityWatering.max_per_period === 1) {
-                        if (lastWateredIso) {
-                            const nextIso = this._addDays(lastWateredIso, entityWatering.period_days);
-                            const daysLeft = this._daysUntil(nextIso);
-                            if (daysLeft <= 0) {
-                                parts.push(`Allowed: now`);
-                            } else {
-                                parts.push(`Next allowed: ${this._formatDate(nextIso)} (${daysLeft} day(s))`);
-                            }
-                        } else {
-                            parts.push(`Next allowed: now`);
-                        }
-                    } else {
-                        // For more complex counts we can't compute without history - display configuration hint
-                        parts.push(`Watering rule: ${entityWatering.max_per_period}x per ${entityWatering.period_days} days`);
-                    }
-                } else if (config.watering_label) {
-                    // allow a simple label
-                    parts.push(config.watering_label);
                 }
-
-                waterInfo.textContent = parts.join(' · ');
-                sensorEl.appendChild(waterInfo);
             }
 
             sensorsDiv.appendChild(sensorEl);
@@ -346,12 +424,15 @@ class BetterMifloraCard extends HTMLElement {
                 object-fit: cover;
             }
             .sensor {
-                display: flex;
+                display: block;
                 cursor: pointer;
                 padding-bottom: 10px;
+                margin-bottom: 6px;
+            }
+            .sensor-row {
+                display: flex;
+                width: 100%;
                 align-items: center;
-                flex-direction: row;
-                gap: 6px;
             }
             .sensor:focus {
                 outline: 2px solid var(--paper-item-icon-active-color, #8bc34a);
@@ -361,6 +442,7 @@ class BetterMifloraCard extends HTMLElement {
                 margin-left: 10px;
                 color: var(--paper-item-icon-color);
                 width: 36px;
+                flex: 0 0 36px;
             }
             .name {
                 margin-top: 3px;
@@ -368,7 +450,7 @@ class BetterMifloraCard extends HTMLElement {
                 white-space: nowrap;
                 overflow: hidden;
                 text-overflow: ellipsis;
-                max-width: 140px;
+                max-width: 220px;
             }
             .state {
                 white-space: nowrap;
@@ -382,9 +464,45 @@ class BetterMifloraCard extends HTMLElement {
             .secondary {
                 margin-left: 8px;
             }
-            .water-info {
+            .progress-wrap {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                margin-left: 10px;
+                margin-top: 6px;
+            }
+            .progress {
+                background: rgba(0,0,0,0.06);
+                border-radius: 6px;
+                height: 10px;
+                width: calc(100% - 70px);
+                overflow: hidden;
+                flex: 1 1 auto;
+            }
+            .progress-fill {
+                height: 100%;
+                width: 0%;
+                border-radius: 6px;
+                transition: width 300ms ease, background 300ms ease;
+            }
+            .progress-label {
+                min-width: 60px;
+                text-align: right;
+                font-size: 0.85rem;
+                color: var(--secondary-text-color);
+            }
+            .water-line {
                 display: block;
                 margin-left: 10px;
+                margin-top: 6px;
+                padding-top: 6px;
+                font-size: 0.85rem;
+                color: var(--secondary-text-color);
+                border-top: 1px dashed rgba(0,0,0,0.06);
+                width: 100%;
+            }
+            .water-next {
+                display: block;
             }
             .clearfix::after {
                 content: "";
