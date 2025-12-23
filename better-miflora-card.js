@@ -63,38 +63,80 @@ class BetterMifloraCard extends HTMLElement {
         }
     }
 
-    // compute progress fill percent and color based on configured range
-    _computeProgress(stateNum, entityMin, entityMax, globalMin, globalMax) {
-        // Determine effective min/max (priority: entity -> global -> default)
+    _clamp(v, a, b) {
+        return Math.max(a, Math.min(b, v));
+    }
+
+    // compute progress fill percent and gradient & label color based on configured range
+    // colors: { in_range, below, above } - you can pass custom colors from config (global or per-entity)
+    _computeProgress(stateNum, entityMin, entityMax, globalMin, globalMax, colors) {
+        // Determine effective min/max thresholds (priority: entity -> global -> null)
         const min = (typeof entityMin === 'number') ? entityMin : ((typeof globalMin === 'number') ? globalMin : null);
         const max = (typeof entityMax === 'number') ? entityMax : ((typeof globalMax === 'number') ? globalMax : null);
 
         if (stateNum === null || stateNum === undefined || typeof stateNum !== 'number' || isNaN(stateNum)) {
-            return { percent: 0, color: 'var(--disabled-text-color, #bbb)' };
+            // no data
+            const fallbackColor = (colors && colors.in_range) ? colors.in_range : 'var(--disabled-text-color, #bbb)';
+            return { percent: 0, gradient: `linear-gradient(90deg, ${fallbackColor} 0%, ${fallbackColor} 100%)`, labelColor: fallbackColor };
         }
 
-        let percent = 0;
-        if (min !== null && max !== null && (max !== min)) {
-            // fill is relative to the configured range
-            percent = ((stateNum - min) / (max - min)) * 100;
-        } else {
-            // fallback to direct percent (assume 0-100)
-            percent = stateNum;
-        }
-        // clamp
-        percent = Math.max(0, Math.min(100, percent));
+        // percent is the fill width for current value (absolute 0-100)
+        const percent = this._clamp(Math.round(stateNum), 0, 100);
 
-        // color: below min => red, between => green, above max => orange
-        let color = 'var(--paper-item-icon-active-color, #8bc34a)'; // green default
+        // Resolve colors with sensible defaults
+        const inRangeColor = (colors && colors.in_range) ? colors.in_range : 'var(--paper-item-icon-active-color, #8bc34a)'; // green
+        const belowColor = (colors && colors.below) ? colors.below : 'var(--error-color, #d32f2f)'; // red
+        const aboveColor = (colors && colors.above) ? colors.above : 'var(--accent-color, #ff9800)'; // amber
+
+        // Decide label color based on where state sits relative to thresholds
+        let labelColor = inRangeColor;
         if (min !== null && stateNum < min) {
-            color = 'var(--error-color, #d32f2f)'; // red
+            labelColor = belowColor;
         } else if (max !== null && stateNum > max) {
-            color = 'var(--accent-color, #ff9800)'; // orange
+            labelColor = aboveColor;
         } else {
-            color = 'var(--paper-item-icon-active-color, #8bc34a)'; // green
+            labelColor = inRangeColor;
         }
 
-        return { percent: Math.round(percent), color };
+        // Build a smooth gradient that transitions from belowColor -> inRangeColor -> aboveColor
+        // We map threshold points to absolute percent positions (0-100):
+        // - minPos: position of min threshold (if provided) otherwise 0
+        // - maxPos: position of max threshold (if provided) otherwise 100
+        // Ensure ordering minPos <= maxPos
+        let minPos = (min !== null) ? this._clamp(min, 0, 100) : 0;
+        let maxPos = (max !== null) ? this._clamp(max, 0, 100) : 100;
+        if (minPos > maxPos) {
+            // swap to avoid malformed gradient
+            const tmp = minPos;
+            minPos = maxPos;
+            maxPos = tmp;
+        }
+
+        // Construct gradient stops with smooth transitions:
+        // belowColor from 0 -> minPos, then transition into inRangeColor between minPos and maxPos, then transition to aboveColor from maxPos -> 100
+        // For a smoother look, we'll add small overlap stops (1% overlap) but clamp them.
+        const overlap = 1; // percent overlap for smooth edge
+        const stopA = this._clamp(minPos - overlap, 0, 100);
+        const stopB = this._clamp(minPos + overlap, 0, 100);
+        const stopC = this._clamp(maxPos - overlap, 0, 100);
+        const stopD = this._clamp(maxPos + overlap, 0, 100);
+
+        // If min==max, just create a two-color gradient blending below->inRange->above at that point
+        let gradient;
+        if (min !== null && max !== null && minPos === maxPos) {
+            // single threshold: blend below -> inRange -> above at same point
+            gradient = `linear-gradient(90deg, ${belowColor} 0%, ${belowColor} ${minPos}%, ${inRangeColor} ${minPos}%, ${inRangeColor} ${minPos}%, ${aboveColor} ${minPos}%, ${aboveColor} 100%)`;
+        } else {
+            gradient = `linear-gradient(90deg,
+                ${belowColor} 0%,
+                ${belowColor} ${stopA}%,
+                ${inRangeColor} ${stopB}%,
+                ${inRangeColor} ${stopC}%,
+                ${aboveColor} ${stopD}%,
+                ${aboveColor} 100%)`.replace(/\s+/g, ' ');
+        }
+
+        return { percent, gradient, labelColor };
     }
 
     // Home Assistant will set the hass property when the state of Home Assistant changes.
@@ -107,6 +149,14 @@ class BetterMifloraCard extends HTMLElement {
         const _globalMinMoisture = this._safeNumber(config.min_moisture);
         const _minConductivity = this._safeNumber(config.min_conductivity);
         const _minTemperature = this._safeNumber(config.min_temperature);
+
+        // read optional global colors from config (you can set these in your card config)
+        // Example: color_in_range: '#3fbf3f', color_below: '#d32f2f', color_above: '#ffb300'
+        const globalColorConfig = {
+            in_range: config.color_in_range || null,
+            below: config.color_below || null,
+            above: config.color_above || null
+        };
 
         const container = this.shadowRoot.getElementById('container');
         if (!container) return;
@@ -161,6 +211,13 @@ class BetterMifloraCard extends HTMLElement {
             // per-entity min/max (allow entity-level overrides)
             const entityMin = (typeof entry.min_moisture === 'number') ? entry.min_moisture : null;
             const entityMax = (typeof entry.max_moisture === 'number') ? entry.max_moisture : null;
+
+            // per-entity color overrides (optional)
+            const entryColors = {
+                in_range: entry.color_in_range || null,
+                below: entry.color_below || null,
+                above: entry.color_above || null
+            };
 
             // Determine effective min/max to decide alert and moisture info
             if (_name === 'moisture' && _stateNum !== null) {
@@ -253,7 +310,14 @@ class BetterMifloraCard extends HTMLElement {
 
             // Progress bar for moisture sensors (based on card inputs)
             if (_name === 'moisture') {
-                const { percent, color } = this._computeProgress(_stateNum, entityMin, entityMax, _globalMinMoisture, _globalMaxMoisture);
+                // merge global and entry colors, entry takes precedence
+                const mergedColors = {
+                    in_range: entryColors.in_range || globalColorConfig.in_range || null,
+                    below: entryColors.below || globalColorConfig.below || null,
+                    above: entryColors.above || globalColorConfig.above || null
+                };
+
+                const { percent, gradient, labelColor } = this._computeProgress(_stateNum, entityMin, entityMax, _globalMinMoisture, _globalMaxMoisture, mergedColors);
 
                 const progressWrap = document.createElement('div');
                 progressWrap.className = compact ? 'progress-wrap compact' : 'progress-wrap';
@@ -264,7 +328,8 @@ class BetterMifloraCard extends HTMLElement {
                 const progressFill = document.createElement('div');
                 progressFill.className = 'progress-fill';
                 progressFill.style.width = `${percent}%`;
-                progressFill.style.background = color;
+                // apply gradient as the fill background
+                progressFill.style.background = gradient;
                 progressFill.setAttribute('aria-valuenow', percent);
                 progressFill.setAttribute('aria-valuemin', 0);
                 progressFill.setAttribute('aria-valuemax', 100);
@@ -275,6 +340,8 @@ class BetterMifloraCard extends HTMLElement {
                 progressLabel.className = 'progress-label';
                 // in compact mode show only percent number (no unit clutter)
                 progressLabel.textContent = (typeof _stateNum === 'number' && !isNaN(_stateNum)) ? (compact ? `${_stateNum}${_uom ? ' ' + _uom : ''}` : `${_stateNum} ${_uom || '%'}`) : '—';
+                // color the label to reflect its zone for readability
+                progressLabel.style.color = labelColor;
 
                 progressWrap.appendChild(progressBar);
                 progressWrap.appendChild(progressLabel);
@@ -379,7 +446,7 @@ class BetterMifloraCard extends HTMLElement {
             .progress-wrap {
                 display: flex;
                 align-items: center;
-                gap: 6px;               /* reduced gap to make it more compact */
+                gap: 6px;               /* compact spacing */
                 margin-left: 10px;
                 margin-top: 6px;
             }
@@ -390,8 +457,8 @@ class BetterMifloraCard extends HTMLElement {
             .progress {
                 background: rgba(0,0,0,0.06);
                 border-radius: 6px;
-                height: 6px;            /* made the bar thinner */
-                width: calc(100% - 90px); /* slightly narrower to fit labels better */
+                height: 6px;            /* bar height */
+                width: calc(100% - 90px);
                 overflow: hidden;
                 flex: 1 1 auto;
             }
