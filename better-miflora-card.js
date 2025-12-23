@@ -11,11 +11,6 @@ class BetterMifloraCard extends HTMLElement {
             conductivity: 'mdi:emoticon-poop',
             battery: 'mdi:battery'
         };
-
-        // Keep track of last seen numeric moisture per sensor so we can detect increases (watering)
-        // and the last recorded "watered" timestamp per sensor.
-        this._lastMoisture = {};
-        this._lastWatered = {};
     }
 
     _computeIcon(sensor, state) {
@@ -68,39 +63,6 @@ class BetterMifloraCard extends HTMLElement {
         }
     }
 
-    _isValidDate(iso) {
-        try {
-            const d = new Date(iso);
-            return !Number.isNaN(d.getTime());
-        } catch (e) {
-            return false;
-        }
-    }
-
-    // add days to ISO/string date
-    _addDays(iso, days) {
-        try {
-            const d = new Date(iso);
-            d.setDate(d.getDate() + days);
-            return d.toISOString();
-        } catch (e) {
-            return null;
-        }
-    }
-
-    // difference in full days (rounded up) between now and futureDate (iso)
-    _daysUntil(iso) {
-        try {
-            const now = new Date();
-            const future = new Date(iso);
-            const diffMs = future - now;
-            const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
-            return diffDays;
-        } catch (e) {
-            return null;
-        }
-    }
-
     // compute progress fill percent and color based on configured range
     _computeProgress(stateNum, entityMin, entityMax, globalMin, globalMax) {
         // Determine effective min/max (priority: entity -> global -> default)
@@ -145,9 +107,6 @@ class BetterMifloraCard extends HTMLElement {
         const _globalMinMoisture = this._safeNumber(config.min_moisture);
         const _minConductivity = this._safeNumber(config.min_conductivity);
         const _minTemperature = this._safeNumber(config.min_temperature);
-
-        // delta threshold to consider an increase to be a "watering" event (percent points)
-        const globalDetectDelta = (typeof config.water_detect_delta === 'number') ? config.water_detect_delta : 2;
 
         const container = this.shadowRoot.getElementById('container');
         if (!container) return;
@@ -199,27 +158,12 @@ class BetterMifloraCard extends HTMLElement {
             let _alertIcon = '';
             let moistureInfo = '';
 
-            // Determine per-entity detect delta and watering config
-            const entityWatering = entry.watering || {};
-            const detectDelta = (typeof entityWatering.detect_delta === 'number') ? entityWatering.detect_delta : globalDetectDelta;
-            const intervalDays = (typeof entityWatering.interval_days === 'number') ? entityWatering.interval_days : (typeof config.watering_interval_days === 'number' ? config.watering_interval_days : null);
-
             // per-entity min/max (allow entity-level overrides)
             const entityMin = (typeof entry.min_moisture === 'number') ? entry.min_moisture : null;
             const entityMax = (typeof entry.max_moisture === 'number') ? entry.max_moisture : null;
 
-            // detect moisture increases (watering events)
+            // Determine effective min/max to decide alert and moisture info
             if (_name === 'moisture' && _stateNum !== null) {
-                const prev = this._lastMoisture[_sensor];
-                if (prev !== undefined && prev !== null && _stateNum > prev + detectDelta) {
-                    // Consider this a watering event — record timestamp.
-                    const nowIso = new Date().toISOString();
-                    this._lastWatered[_sensor] = nowIso;
-                }
-                // update last moisture reading
-                this._lastMoisture[_sensor] = _stateNum;
-
-                // use effective min/max to decide alert
                 const effectiveMin = (entityMin !== null) ? entityMin : _globalMinMoisture;
                 const effectiveMax = (entityMax !== null) ? entityMax : _globalMaxMoisture;
 
@@ -288,6 +232,11 @@ class BetterMifloraCard extends HTMLElement {
             nameWrap.className = 'name';
             nameWrap.textContent = `${_display_name}${moistureInfo}`;
 
+            // compact mode: global or per-entity
+            const compactGlobal = Boolean(config.compact);
+            const compactEntity = Boolean(entry.compact);
+            const compact = compactEntity || compactGlobal;
+
             const stateWrap = document.createElement('div');
             stateWrap.className = 'state';
             stateWrap.style = _alertStyle;
@@ -295,7 +244,10 @@ class BetterMifloraCard extends HTMLElement {
 
             sensorRow.appendChild(iconWrap);
             sensorRow.appendChild(nameWrap);
-            sensorRow.appendChild(stateWrap);
+            // show state only when not compact
+            if (!compact) {
+                sensorRow.appendChild(stateWrap);
+            }
 
             sensorEl.appendChild(sensorRow);
 
@@ -304,7 +256,7 @@ class BetterMifloraCard extends HTMLElement {
                 const { percent, color } = this._computeProgress(_stateNum, entityMin, entityMax, _globalMinMoisture, _globalMaxMoisture);
 
                 const progressWrap = document.createElement('div');
-                progressWrap.className = 'progress-wrap';
+                progressWrap.className = compact ? 'progress-wrap compact' : 'progress-wrap';
 
                 const progressBar = document.createElement('div');
                 progressBar.className = 'progress';
@@ -321,7 +273,8 @@ class BetterMifloraCard extends HTMLElement {
 
                 const progressLabel = document.createElement('div');
                 progressLabel.className = 'progress-label';
-                progressLabel.textContent = (typeof _stateNum === 'number' && !isNaN(_stateNum)) ? `${_stateNum} ${_uom || '%'}` : '—';
+                // in compact mode show only percent number (no unit clutter)
+                progressLabel.textContent = (typeof _stateNum === 'number' && !isNaN(_stateNum)) ? (compact ? `${_stateNum}${_uom ? ' ' + _uom : ''}` : `${_stateNum} ${_uom || '%'}`) : '—';
 
                 progressWrap.appendChild(progressBar);
                 progressWrap.appendChild(progressLabel);
@@ -330,7 +283,7 @@ class BetterMifloraCard extends HTMLElement {
             }
 
             // Optional secondary info (like last changed), controlled by config.show_last_changed (boolean)
-            if (config.show_last_changed) {
+            if (!compact && config.show_last_changed) {
                 const lastChangedRaw = hass.states[_sensor] ? hass.states[_sensor].last_changed : null;
                 if (lastChangedRaw) {
                     const secondary = document.createElement('div');
@@ -338,46 +291,6 @@ class BetterMifloraCard extends HTMLElement {
                     secondary.textContent = `Last: ${this._formatDate(lastChangedRaw)}`;
                     secondary.style = 'font-size: 0.75rem; color: var(--secondary-text-color); margin-left: 10px;';
                     sensorEl.appendChild(secondary);
-                }
-            }
-
-            // Watering info display: show last watering and next allowed watering (if interval_days configured)
-            if (_name === 'moisture') {
-                // Determine lastWateredIso: priority -> configured persistent entity -> in-memory detected timestamp
-                let lastWateredIso = null;
-                if (entityWatering && entityWatering.last_watered_entity && hass.states[entityWatering.last_watered_entity]) {
-                    const candidate = hass.states[entityWatering.last_watered_entity].state;
-                    if (this._isValidDate(candidate)) {
-                        lastWateredIso = candidate;
-                    }
-                }
-                if (!lastWateredIso && this._lastWatered[_sensor]) {
-                    lastWateredIso = this._lastWatered[_sensor];
-                }
-
-                const waterLine = document.createElement('div');
-                waterLine.className = 'water-line';
-
-                if (lastWateredIso && this._isValidDate(lastWateredIso)) {
-                    waterLine.textContent = `Watered: ${this._formatDate(lastWateredIso)}`;
-                } else {
-                    waterLine.textContent = `Watered: —`;
-                }
-
-                sensorEl.appendChild(waterLine);
-
-                // Add next-allowed hint if intervalDays is set and we have a lastWateredIso
-                if (intervalDays !== null && lastWateredIso && this._isValidDate(lastWateredIso)) {
-                    const nextIso = this._addDays(lastWateredIso, intervalDays);
-                    if (nextIso) {
-                        const daysLeft = this._daysUntil(nextIso);
-                        const nextText = (daysLeft <= 0) ? 'Next allowed: now' : `Next allowed: ${this._formatDate(nextIso)} (${daysLeft} day(s))`;
-                        const nextEl = document.createElement('div');
-                        nextEl.className = 'water-next';
-                        nextEl.style = 'font-size:0.8rem; color:var(--secondary-text-color); margin-left:10px; margin-top:2px;';
-                        nextEl.textContent = nextText;
-                        sensorEl.appendChild(nextEl);
-                    }
                 }
             }
 
@@ -391,7 +304,6 @@ class BetterMifloraCard extends HTMLElement {
             throw new Error('Please define one or more entities in the entities array');
         }
 
-        // Keep existing _lastMoisture / _lastWatered when reconfiguring where possible.
         // Remove previous root child (if any)
         const root = this.shadowRoot;
         if (root.lastChild) root.removeChild(root.lastChild);
@@ -471,6 +383,10 @@ class BetterMifloraCard extends HTMLElement {
                 margin-left: 10px;
                 margin-top: 6px;
             }
+            .progress-wrap.compact {
+                margin-left: 10px;
+                margin-top: 6px;
+            }
             .progress {
                 background: rgba(0,0,0,0.06);
                 border-radius: 6px;
@@ -491,23 +407,15 @@ class BetterMifloraCard extends HTMLElement {
                 font-size: 0.85rem;
                 color: var(--secondary-text-color);
             }
-            .water-line {
-                display: block;
-                margin-left: 10px;
-                margin-top: 6px;
-                padding-top: 6px;
-                font-size: 0.85rem;
-                color: var(--secondary-text-color);
-                border-top: 1px dashed rgba(0,0,0,0.06);
-                width: 100%;
-            }
-            .water-next {
-                display: block;
-            }
             .clearfix::after {
                 content: "";
                 clear: both;
                 display: table;
+            }
+
+            /* compact tweaks */
+            :host([compact]) .name {
+                max-width: 200px;
             }
         `;
 
