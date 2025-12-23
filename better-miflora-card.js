@@ -125,6 +125,9 @@ class BetterMifloraCard extends HTMLElement {
         const sensorsDiv = this.shadowRoot.getElementById('sensors');
         sensorsDiv.innerHTML = '';
 
+        // Track if any moisture sensor is below its min (to show 'Dry' badge)
+        let anyDry = false;
+
         for (let i = 0; i < config.entities.length; i++) {
             const entry = config.entities[i];
             const type = entry.type;
@@ -156,8 +159,16 @@ class BetterMifloraCard extends HTMLElement {
                 const effectiveMin = (entMin !== null) ? entMin : globalMin;
                 const effectiveMax = (entMax !== null) ? entMax : globalMax;
 
-                if (effectiveMax !== null && stateNum > effectiveMax) { alertStyle = 'color:var(--error-color, red);'; alertIcon = '▲ '; }
-                else if (effectiveMin !== null && stateNum < effectiveMin) { alertStyle = 'color:var(--error-color, red);'; alertIcon = '▼ '; if (!config.custom_icons || !config.custom_icons.moisture) icon = 'mdi:water-off'; }
+                if (effectiveMax !== null && stateNum > effectiveMax) {
+                    alertStyle = 'color:var(--error-color, red);';
+                    alertIcon = '▲ ';
+                } else if (effectiveMin !== null && stateNum < effectiveMin) {
+                    alertStyle = 'color:var(--error-color, red);';
+                    alertIcon = '▼ ';
+                    if (!config.custom_icons || !config.custom_icons.moisture) icon = 'mdi:water-off';
+                    // Mark overall dry state
+                    anyDry = true;
+                }
 
                 if ((entMin !== null && entMax !== null) || (globalMin !== null && globalMax !== null)) {
                     const showMin = (entMin !== null) ? entMin : globalMin;
@@ -202,19 +213,19 @@ class BetterMifloraCard extends HTMLElement {
 
             // Progress bar for moisture (use min/max from entry or global)
             if (type === 'moisture') {
-                const mergedColors = {
+                const merged = {
                     in_range: entry.color_in_range || globalColors && globalColors.in_range || globalColors && globalColors.in_range || globalColors.in_range || config.color_in_range || null,
                     below: entry.color_below || config.color_below || null,
                     above: entry.color_above || config.color_above || null
                 };
-                // fallback merge simpler:
-                const merged = {
+                // simpler merge:
+                const mergedColors = {
                     in_range: entry.color_in_range || globalColors.in_range || null,
                     below: entry.color_below || globalColors.below || null,
                     above: entry.color_above || globalColors.above || null
                 };
 
-                const { percent, gradient, labelColor } = this._computeProgress(stateNum, entMin, entMax, globalMin, globalMax, merged);
+                const { percent, gradient, labelColor } = this._computeProgress(stateNum, entMin, entMax, globalMin, globalMax, mergedColors);
 
                 const progressWrap = document.createElement('div'); progressWrap.className = compact ? 'progress-wrap compact' : 'progress-wrap';
                 const progressBar = document.createElement('div'); progressBar.className = 'progress';
@@ -250,6 +261,18 @@ class BetterMifloraCard extends HTMLElement {
 
             sensorsDiv.appendChild(sensorEl);
         }
+
+        // Update the Dry badge (only show when any moisture sensor is below its min)
+        const statusEl = this.shadowRoot.getElementById('status');
+        if (statusEl) {
+            if (anyDry) {
+                statusEl.textContent = 'Dry';
+                statusEl.style.display = 'inline-block';
+            } else {
+                statusEl.textContent = '';
+                statusEl.style.display = 'none';
+            }
+        }
     }
 
     // Called rarely; set up the card
@@ -267,6 +290,7 @@ class BetterMifloraCard extends HTMLElement {
         const content = document.createElement('div');
         const plantimage = document.createElement('div');
         const style = document.createElement('style');
+        const status = document.createElement('div');
 
         style.textContent = `
             ha-card {
@@ -351,6 +375,21 @@ class BetterMifloraCard extends HTMLElement {
 
             .secondary { margin-left: 8px; }
             .clearfix::after { content: ""; clear: both; display: table; }
+
+            /* Dry badge (hidden by default) */
+            .status {
+                position: absolute;
+                left: 12px;
+                top: 8px;
+                display: none;
+                background: var(--error-color, #d32f2f);
+                color: #fff;
+                padding: 2px 8px;
+                border-radius: 12px;
+                font-size: 0.75rem;
+                font-weight: 500;
+                z-index: 5;
+            }
         `;
 
         plantimage.innerHTML = this.config.image ? `<img class="image" src="/local/${this.config.image}" alt="${this.config.title || 'plant image'}">` : '';
@@ -362,7 +401,12 @@ class BetterMifloraCard extends HTMLElement {
             </div>
         `;
 
+        status.id = 'status';
+        status.className = 'status';
+        status.textContent = ''; // hidden by default
+
         card.header = config.title || '';
+        card.appendChild(status);    // badge on top-left
         card.appendChild(plantimage); // float-right image (like original)
         card.appendChild(content);
         card.appendChild(style);
