@@ -179,13 +179,13 @@ class BetterMifloraCard extends HTMLElement {
         flex-direction: row; 
         gap: 16px; 
         align-items: flex-start;
-        flex-wrap: wrap;
       }
       #sensors { 
         display: flex; 
         flex-direction: column; 
         flex: 1 1 auto; 
         min-width: 0;
+        order: 1;
       }
       .image {
         width: 130px;
@@ -197,6 +197,7 @@ class BetterMifloraCard extends HTMLElement {
         object-position: center;
         background-color: var(--card-background-color, transparent);
         box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        order: 2;
       }
 
       .sensor { 
@@ -205,14 +206,12 @@ class BetterMifloraCard extends HTMLElement {
         cursor: pointer;
         padding: 12px 8px;
         border-bottom: 1px solid var(--divider-color, rgba(0,0,0,0.06));
-        transition: background-color 0.2s ease, transform 0.15s ease;
-        flex-wrap: nowrap;
+        transition: background-color 0.2s ease;
         gap: 8px;
       }
       .sensor:hover { 
         background-color: var(--secondary-background-color, rgba(0,0,0,0.02)); 
         border-radius: 8px;
-        transform: translateX(4px);
       }
       .sensor:focus-visible {
         outline: 2px solid var(--primary-color);
@@ -224,7 +223,7 @@ class BetterMifloraCard extends HTMLElement {
       }
 
       .icon { 
-        margin-right: 12px; 
+        margin-right: 8px; 
         color: var(--paper-item-icon-color, #44739e); 
         width: 24px; 
         height: 24px; 
@@ -252,15 +251,12 @@ class BetterMifloraCard extends HTMLElement {
         white-space: nowrap; 
         overflow: hidden; 
         text-overflow: ellipsis; 
-        margin-top: 3px;
         min-width: 0;
       }
       .state { 
-        margin-left: 12px; 
         font-weight: 500; 
         color: var(--secondary-text-color); 
         white-space: nowrap; 
-        margin-top: 3px; 
         flex: 0 0 auto;
       }
       .secondary { 
@@ -286,10 +282,14 @@ class BetterMifloraCard extends HTMLElement {
           flex-direction: column;
           gap: 12px;
         }
+        #sensors {
+          order: 2;
+        }
         .image {
           width: 100%;
           height: auto;
           max-height: 200px;
+          order: 1;
         }
         .sensor {
           padding: 10px 4px;
