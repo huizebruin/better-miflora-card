@@ -90,7 +90,7 @@ class BetterMifloraCard extends HTMLElement {
     const maxMoisture = this._safeNumber(config.max_moisture);
     const minMoisture = this._safeNumber(config.min_moisture);
     const minConductivity = this._safeNumber(config.min_conductivity);
-    const minTemperature = this._safeNumber(config.min_termperature);
+    const minTemperature = this._safeNumber(config.min_temperature);
 
     let alertStyle = '', alertIcon = '', rangeInfo = '';
 
@@ -181,7 +181,9 @@ class BetterMifloraCard extends HTMLElement {
         box-shadow: 0 2px 8px rgba(0,0,0,0.15);
       }
 
-      .sensor { display: flex; align-items: center; cursor: pointer; padding: 12px 8px; border-bottom: 1px solid var(--divider-color, rgba(0,0,0,0.06)); transition: background-color 0.2s ease; flex-wrap: nowrap; }
+      .sensor {
+    display: flex;
+    flex-wrap: wrap; }
       .sensor:hover { background-color: var(--secondary-background-color, rgba(0,0,0,0.02)); border-radius: 8px; }
       .sensor:last-child { border-bottom: none; }
 
